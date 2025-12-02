@@ -49,7 +49,8 @@ RUN pip install "git+https://github.com/facebookresearch/pytorch3d.git"
 
 # Build FFmpeg 4.4.2 for decord compatibility
 RUN cd /tmp && \
-    git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg-4.4.2 && \
+    #git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg-4.4.2 && \
+    git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg-4.4.2 && \
     cd ffmpeg-4.4.2 && \
     git checkout n4.4.2 -b n4.4.2 && \
     ./configure --enable-shared --enable-pic --prefix=/usr && \
