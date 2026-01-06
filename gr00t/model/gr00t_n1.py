@@ -163,8 +163,19 @@ class GR00T_N1_5(PreTrainedModel):
         inputs: dict,
     ) -> BatchFeature:
         backbone_inputs, action_inputs = self.prepare_input(inputs)
+        
+        # [NVTX] Backbone 프로파일링 시작
+        torch.cuda.nvtx.range_push("Backbone_Forward")
         backbone_outputs = self.backbone(backbone_inputs)
+        torch.cuda.nvtx.range_pop()
+        # [NVTX] 끝
+
+        # [NVTX] ActionHead 프로파일링 시작
+        torch.cuda.nvtx.range_push("ActionHead_Forward")
         action_head_outputs = self.action_head(backbone_outputs, action_inputs)
+        torch.cuda.nvtx.range_pop()
+        # [NVTX] 끝
+
         self.validate_data(action_head_outputs, backbone_outputs, is_training=True)
         return action_head_outputs
 
@@ -173,14 +184,28 @@ class GR00T_N1_5(PreTrainedModel):
         inputs: dict,
     ) -> BatchFeature:
         backbone_inputs, action_inputs = self.prepare_input(inputs)
+        
+        # [NVTX] Backbone (ViT + LLM) 프로파일링 시작
+        torch.cuda.nvtx.range_push("Backbone_Inference")
         # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
         backbone_outputs = self.backbone(backbone_inputs)
+        torch.cuda.nvtx.range_pop()
+        # [NVTX] 끝
+
+        # [NVTX] ActionHead (Diffusion) 프로파일링 시작
+        torch.cuda.nvtx.range_push("ActionHead_Inference")
         action_head_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
+        torch.cuda.nvtx.range_pop()
+        # [NVTX] 끝
+
         self.validate_data(action_head_outputs, backbone_outputs, is_training=False)
         return action_head_outputs
 
     def prepare_input(self, inputs) -> Tuple[BatchFeature, BatchFeature]:
         self.validate_inputs(inputs)
+        
+        # [NVTX] 입력 전처리 부분도 궁금하다면 (선택사항)
+        torch.cuda.nvtx.range_push("Prepare_Input")
         backbone_inputs = self.backbone.prepare_input(inputs)
         action_inputs = self.action_head.prepare_input(inputs)
 
@@ -194,6 +219,10 @@ class GR00T_N1_5(PreTrainedModel):
 
         backbone_inputs = tree.map_structure(to_device_with_maybe_dtype, backbone_inputs)
         action_inputs = tree.map_structure(to_device_with_maybe_dtype, action_inputs)
+        
+        torch.cuda.nvtx.range_pop()
+        # [NVTX] 끝
+        
         return backbone_inputs, action_inputs
 
     @classmethod

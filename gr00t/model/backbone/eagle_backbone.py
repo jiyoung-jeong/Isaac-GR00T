@@ -62,6 +62,38 @@ class EagleBackbone(nn.Module):
         self.select_layer = select_layer
         self.set_trainable_parameters(tune_llm, tune_visual)
 
+        # [NVTX] 내부 모듈(ViT, LLM)에 프로파일링 센서 부착
+        self._install_nvtx_hooks()
+
+    def _install_nvtx_hooks(self):
+        """
+        내부 서브 모듈들의 forward 함수를 래핑하여 NVTX 범위를 자동으로 기록합니다.
+        """
+        def wrap_module(module, name):
+            if not hasattr(module, "_nvtx_wrapped"):
+                original_forward = module.forward
+                def wrapped_forward(*args, **kwargs):
+                    torch.cuda.nvtx.range_push(name)
+                    try:
+                        return original_forward(*args, **kwargs)
+                    finally:
+                        torch.cuda.nvtx.range_pop()
+                module.forward = wrapped_forward
+                module._nvtx_wrapped = True
+                print(f"[Profiling] Installed NVTX hook for {name}")
+
+        # 1. Vision Encoder (ViT)
+        if hasattr(self.eagle_model, "vision_model"):
+            wrap_module(self.eagle_model.vision_model, "Backbone_ViT")
+        
+        # 2. Projector (Vision -> LLM 연결부)
+        if hasattr(self.eagle_model, "mlp1"):
+            wrap_module(self.eagle_model.mlp1, "Backbone_Projector")
+
+        # 3. LLM (Language Model)
+        if hasattr(self.eagle_model, "language_model"):
+            wrap_module(self.eagle_model.language_model, "Backbone_LLM")
+
     def set_trainable_parameters(self, tune_llm: bool, tune_visual: bool):
         self.tune_llm = tune_llm
         self.tune_visual = tune_visual
