@@ -32,7 +32,7 @@ if [ "$VIDEO_VIEWS" = "2" ]; then
 else   # one video view (default)
     MIN_LEN=80
     OPT_LEN=296
-    MAX_LEN=300
+    MAX_LEN=512
 fi
 
 # Define precision settings (can be overridden via environment variables)

@@ -60,6 +60,7 @@ from typing import Literal
 
 import numpy as np
 import tyro
+import torch.cuda.nvtx as nvtx
 
 from gr00t.data.embodiment_tags import EMBODIMENT_TAG_MAPPING
 from gr00t.eval.robot import RobotInferenceClient, RobotInferenceServer
@@ -204,6 +205,34 @@ def main(args: ArgsConfig):
                 policy, args.trt_engine_path, args.vit_dtype, args.llm_dtype, args.dit_dtype
             )
             print("TensorRT engines loaded successfully!")
+
+        # =================================================================
+        # [여기서부터 추가하세요] NVTX 프로파일링을 위한 '몽키 패치' 구간
+        # =================================================================
+        print(">>> NVTX Profiling Hook Installed! <<<")
+        
+        # 원래 정책(Policy)이 가지고 있던 '행동 결정 함수'를 백업합니다.
+        # 보통 로봇 코드는 .get_action() 혹은 __call__()을 씁니다. 안전하게 둘 다 처리합니다.
+        
+        target_method_name = "get_action" if hasattr(policy, "get_action") else "__call__"
+        original_method = getattr(policy, target_method_name)
+
+        # 우리가 만든 '스톱워치 포함' 가짜 함수
+        def profiled_inference(*args, **kwargs):
+            # 1. 여기서부터 '모델 추론' 시작이라고 표시
+            nvtx.range_push("Total_Policy_Inference") 
+            try:
+                # 2. 원래 모델 실행
+                return original_method(*args, **kwargs)
+            finally:
+                # 3. 끝났다고 표시
+                nvtx.range_pop()
+
+        # 가짜 함수를 원래 자리에 덮어씌웁니다.
+        setattr(policy, target_method_name, profiled_inference)
+        # =================================================================
+        # [추가 끝] 이제 서버는 우리 함수를 먼저 거쳐가게 됩니다.
+        # =================================================================
 
         # Start the server
         if args.http_server:
