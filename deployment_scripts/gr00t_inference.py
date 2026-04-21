@@ -15,6 +15,7 @@
 
 import argparse
 import os
+import sys
 from functools import partial
 
 import torch
@@ -24,6 +25,18 @@ from trt_model_forward import setup_tensorrt_engines
 import gr00t
 from gr00t.data.dataset import LeRobotSingleDataset
 from gr00t.model.policy import Gr00tPolicy
+
+
+def get_monotonic_ns():
+    """Get monotonic time in nanoseconds from /proc/uptime (same as run_with_logs.sh base_ns())."""
+    try:
+        with open("/proc/uptime", "r") as f:
+            uptime_sec = float(f.read().split()[0])
+            return int(uptime_sec * 1e9)
+    except (FileNotFoundError, ValueError, IndexError):
+        # Fallback to time.time_ns() if /proc/uptime not available (non-Linux)
+        import time
+        return time.time_ns()
 
 
 def compare_predictions(pred_tensorrt, pred_torch):
@@ -202,7 +215,26 @@ if __name__ == "__main__":
     step_data = dataset[0]
 
     if args.inference_mode == "pytorch":
+        # Mark measurement start
+        measure_start_ns = get_monotonic_ns()
+        print(f"MEASURE_START_NS={measure_start_ns}", file=sys.stderr)
+        
+        # Run inference with GPU sync for accurate latency measurement
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
         predicted_action = policy.get_action(step_data)
+        
+        # Sync GPU to ensure inference is complete
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
+        # Mark measurement end
+        measure_end_ns = get_monotonic_ns()
+        latency_ms = (measure_end_ns - measure_start_ns) / 1e6
+        print(f"MEASURE_END_NS={measure_end_ns}", file=sys.stderr)
+        print(f"latency_ms={latency_ms:.3f}", file=sys.stderr)
+        
         print("\n=== PyTorch Inference Results ===")
         for key, value in predicted_action.items():
             print(key, value.shape)
@@ -213,7 +245,26 @@ if __name__ == "__main__":
             policy, args.trt_engine_path, args.vit_dtype, args.llm_dtype, args.dit_dtype
         )
 
+        # Mark measurement start
+        measure_start_ns = get_monotonic_ns()
+        print(f"MEASURE_START_NS={measure_start_ns}", file=sys.stderr)
+        
+        # Run inference with GPU sync for accurate latency measurement
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
         predicted_action = policy.get_action(step_data)
+        
+        # Sync GPU to ensure inference is complete
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
+        # Mark measurement end
+        measure_end_ns = get_monotonic_ns()
+        latency_ms = (measure_end_ns - measure_start_ns) / 1e6
+        print(f"MEASURE_END_NS={measure_end_ns}", file=sys.stderr)
+        print(f"latency_ms={latency_ms:.3f}", file=sys.stderr)
+        
         print("\n=== TensorRT Inference Results ===")
         for key, value in predicted_action.items():
             print(key, value.shape)
@@ -230,13 +281,41 @@ if __name__ == "__main__":
         policy.model.action_head.get_action = partial(
             action_head_pytorch_forward, policy.model.action_head
         )
+        
+        # Mark PyTorch measurement start
+        measure_start_ns_pytorch = get_monotonic_ns()
+        print(f"MEASURE_START_NS_PYTORCH={measure_start_ns_pytorch}", file=sys.stderr)
+        
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         predicted_action_torch = policy.get_action(step_data)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
+        measure_end_ns_pytorch = get_monotonic_ns()
+        latency_ms_pytorch = (measure_end_ns_pytorch - measure_start_ns_pytorch) / 1e6
+        print(f"MEASURE_END_NS_PYTORCH={measure_end_ns_pytorch}", file=sys.stderr)
+        print(f"latency_ms_pytorch={latency_ms_pytorch:.3f}", file=sys.stderr)
 
         # Setup TensorRT engines and run inference
         setup_tensorrt_engines(
             policy, args.trt_engine_path, args.vit_dtype, args.llm_dtype, args.dit_dtype
         )
+        
+        # Mark TensorRT measurement start
+        measure_start_ns_tensorrt = get_monotonic_ns()
+        print(f"MEASURE_START_NS_TENSORRT={measure_start_ns_tensorrt}", file=sys.stderr)
+        
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         predicted_action_tensorrt = policy.get_action(step_data)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
+        measure_end_ns_tensorrt = get_monotonic_ns()
+        latency_ms_tensorrt = (measure_end_ns_tensorrt - measure_start_ns_tensorrt) / 1e6
+        print(f"MEASURE_END_NS_TENSORRT={measure_end_ns_tensorrt}", file=sys.stderr)
+        print(f"latency_ms_tensorrt={latency_ms_tensorrt:.3f}", file=sys.stderr)
 
         # Compare predictions
         compare_predictions(predicted_action_tensorrt, predicted_action_torch)

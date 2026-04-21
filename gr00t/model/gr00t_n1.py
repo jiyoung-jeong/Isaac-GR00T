@@ -29,6 +29,7 @@ from .action_head.flow_matching_action_head import (
     FlowmatchingActionHeadConfig,
 )
 from .backbone import EagleBackbone
+from gr00t.eval.nvtx_range_logger import log_nvtx_range
 
 BACKBONE_FEATURE_KEY = "backbone_features"
 ACTION_KEY = "action_pred"
@@ -187,14 +188,20 @@ class GR00T_N1_5(PreTrainedModel):
         
         # [NVTX] Backbone (ViT + LLM) 프로파일링 시작
         torch.cuda.nvtx.range_push("Backbone_Inference")
+        log_nvtx_range("BACKBONE_START")    
         # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
         backbone_outputs = self.backbone(backbone_inputs)
+        torch.cuda.synchronize()
+        log_nvtx_range("BACKBONE_END")
         torch.cuda.nvtx.range_pop()
         # [NVTX] 끝
 
         # [NVTX] ActionHead (Diffusion) 프로파일링 시작
         torch.cuda.nvtx.range_push("ActionHead_Inference")
+        log_nvtx_range("ACTION_HEAD_START")
         action_head_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
+        torch.cuda.synchronize()
+        log_nvtx_range("ACTION_HEAD_END")
         torch.cuda.nvtx.range_pop()
         # [NVTX] 끝
 

@@ -14,6 +14,8 @@
 # limitations under the License.
 import os
 
+from gr00t.eval.nvtx_range_logger import log_nvtx_range
+
 import torch
 from torch import nn
 from transformers import AutoConfig, AutoModel
@@ -74,9 +76,12 @@ class EagleBackbone(nn.Module):
                 original_forward = module.forward
                 def wrapped_forward(*args, **kwargs):
                     torch.cuda.nvtx.range_push(name)
+                    log_nvtx_range(f"{name}_START")
                     try:
                         return original_forward(*args, **kwargs)
                     finally:
+                        torch.cuda.synchronize()
+                        log_nvtx_range(f"{name}_END")
                         torch.cuda.nvtx.range_pop()
                 module.forward = wrapped_forward
                 module._nvtx_wrapped = True

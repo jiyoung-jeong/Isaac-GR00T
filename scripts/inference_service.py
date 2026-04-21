@@ -60,6 +60,7 @@ from typing import Literal
 
 import numpy as np
 import tyro
+import torch
 import torch.cuda.nvtx as nvtx
 
 from gr00t.data.embodiment_tags import EMBODIMENT_TAG_MAPPING
@@ -234,6 +235,12 @@ def main(args: ArgsConfig):
         # [추가 끝] 이제 서버는 우리 함수를 먼저 거쳐가게 됩니다.
         # =================================================================
 
+        # Action head get_action을 torch.compile로 감싸기
+        #policy.model.action_head.get_action = torch.compile(
+        #    policy.model.action_head.get_action,
+        #    mode="reduce-overhead",  # 또는 "max-autotune"
+        #)
+
         # Start the server
         if args.http_server:
             from gr00t.eval.http_server import HTTPInferenceServer  # noqa: F401
@@ -288,3 +295,4 @@ def main(args: ArgsConfig):
 if __name__ == "__main__":
     config = tyro.cli(ArgsConfig)
     main(config)
+

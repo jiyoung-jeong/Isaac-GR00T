@@ -21,6 +21,7 @@ import torch.utils.checkpoint as cp
 from transformers.feature_extraction_utils import BatchFeature
 
 import deployment_scripts.trt_torch as trt
+from gr00t.eval.nvtx_range_logger import log_nvtx_range
 
 
 def eagle_tensorrt_forward(self, vl_input):
@@ -43,7 +44,9 @@ def eagle_tensorrt_forward(self, vl_input):
 
     self.vit_engine.set_runtime_tensor_shape("pixel_values", vl_input["pixel_values"].shape)
     self.vit_engine.set_runtime_tensor_shape("position_ids", position_ids.shape)
+    log_nvtx_range("Backbone_ViT_START")
     vit_embeds = self.vit_engine(vl_input["pixel_values"], position_ids)["vit_embeds"]
+    log_nvtx_range("Backbone_ViT_END")
     vit_embeds = vit_embeds.view(1, -1, vit_embeds.shape[-1])
 
     if self.eagle_model.use_pixel_shuffle:
@@ -91,7 +94,9 @@ def eagle_tensorrt_forward(self, vl_input):
 
     self.llm_engine.set_runtime_tensor_shape("inputs_embeds", input_embeds.shape)
     self.llm_engine.set_runtime_tensor_shape("attention_mask", vl_input["attention_mask"].shape)
+    log_nvtx_range("Backbone_LLM_START")
     embeddings = self.llm_engine(input_embeds, vl_input["attention_mask"])["embeddings"]
+    log_nvtx_range("Backbone_LLM_END")
 
     return BatchFeature(
         data={
@@ -115,9 +120,8 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
     embodiment_id = action_input.embodiment_id
     batch_size = vl_embs.shape[0]
 
-    if action_input.state.dtype != torch.float16:
-        action_input.state = action_input.state.to(torch.float16)
-
+    # TRT engines expect float16; policy may produce bfloat16
+    state_f16 = action_input.state.to(torch.float16)
     if embodiment_id.dtype != torch.int64:
         embodiment_id = embodiment_id.to(torch.int64)
 
@@ -126,9 +130,9 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
 
     # Embed state with batch processing
 
-    self.state_encoder_engine.set_runtime_tensor_shape("state", action_input.state.shape)
+    self.state_encoder_engine.set_runtime_tensor_shape("state", state_f16.shape)
     self.state_encoder_engine.set_runtime_tensor_shape("embodiment_id", embodiment_id.shape)
-    state_features = self.state_encoder_engine(action_input.state, embodiment_id)["output"]
+    state_features = self.state_encoder_engine(state_f16, embodiment_id)["output"]
 
     # Set initial actions as the sampled noise.
     device = vl_embs.device
