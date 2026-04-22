@@ -116,13 +116,13 @@ class TensorRTDiTWrapper:
         if backbone_attention_mask is not None:
             backbone_attention_mask = backbone_attention_mask.to(f"cuda:{self.device}").contiguous()
 
-        self.context.set_input_shape("sa_embs", sa_embs.shape)
-        self.context.set_input_shape("vl_embs", vl_embs.shape)
-        self.context.set_input_shape("timestep", timestep.shape)
+        self._set_input_shape_checked("sa_embs", sa_embs.shape)
+        self._set_input_shape_checked("vl_embs", vl_embs.shape)
+        self._set_input_shape_checked("timestep", timestep.shape)
         if image_mask is not None:
-            self.context.set_input_shape("image_mask", image_mask.shape)
+            self._set_input_shape_checked("image_mask", image_mask.shape)
         if backbone_attention_mask is not None:
-            self.context.set_input_shape("backbone_attention_mask", backbone_attention_mask.shape)
+            self._set_input_shape_checked("backbone_attention_mask", backbone_attention_mask.shape)
 
         self.context.set_tensor_address("sa_embs", sa_embs.data_ptr())
         self.context.set_tensor_address("vl_embs", vl_embs.data_ptr())
@@ -146,6 +146,17 @@ class TensorRTDiTWrapper:
             raise RuntimeError("TensorRT inference failed")
 
         return output
+
+    def _set_input_shape_checked(self, tensor_name: str, shape) -> None:
+        shape_tuple = tuple(int(v) for v in shape)
+        expected_shape = tuple(self.engine.get_tensor_shape(tensor_name))
+        if not self.context.set_input_shape(tensor_name, shape_tuple):
+            raise RuntimeError(
+                f"TensorRT input shape rejected for '{tensor_name}': got {shape_tuple}, "
+                f"engine expects profile-compatible shape like {expected_shape}. "
+                "This commonly means the engine was built with an incompatible batch size profile. "
+                "Rebuild the engine with --max-batch-size >= your eval --n_envs, or run eval with --n_envs 1."
+            )
 
 
 def replace_dit_with_tensorrt(policy: Gr00tPolicy | Any, trt_engine_path: str, device: int = 0):

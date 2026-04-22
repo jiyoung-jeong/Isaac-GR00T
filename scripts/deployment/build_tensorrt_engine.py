@@ -179,8 +179,32 @@ def main():
     parser.add_argument(
         "--workspace", type=int, default=8192, help="Workspace size in MB (default: 8192)"
     )
+    parser.add_argument(
+        "--min-batch-size",
+        type=int,
+        default=1,
+        help="Minimum batch size for TensorRT optimization profile (default: 1)",
+    )
+    parser.add_argument(
+        "--opt-batch-size",
+        type=int,
+        default=4,
+        help="Optimal batch size for TensorRT optimization profile (default: 4)",
+    )
+    parser.add_argument(
+        "--max-batch-size",
+        type=int,
+        default=8,
+        help="Maximum batch size for TensorRT optimization profile (default: 8)",
+    )
 
     args = parser.parse_args()
+    if args.min_batch_size < 1:
+        raise ValueError("--min-batch-size must be >= 1")
+    if not (args.min_batch_size <= args.opt_batch_size <= args.max_batch_size):
+        raise ValueError(
+            "Batch profile must satisfy: min_batch_size <= opt_batch_size <= max_batch_size"
+        )
 
     # Define shapes for your specific model (from export)
     min_shapes = None
@@ -189,26 +213,29 @@ def main():
 
     # Establish Dynamic Shapes to handle variable seq lengths
     # Based on captured inputs but with ranges to handle variations
+    b_min = args.min_batch_size
+    b_opt = args.opt_batch_size
+    b_max = args.max_batch_size
     min_shapes = {
-        "sa_embs": (1, 1, 1536),  # Min: 1 token
-        "vl_embs": (1, 1, 2048),  # Min: 1 token
-        "timestep": (1,),
-        "image_mask": (1, 1),  # Min: 1 token
-        "backbone_attention_mask": (1, 1),  # Min: 1 token
+        "sa_embs": (b_min, 1, 1536),  # Min: 1 token
+        "vl_embs": (b_min, 1, 2048),  # Min: 1 token
+        "timestep": (b_min,),
+        "image_mask": (b_min, 1),  # Min: 1 token
+        "backbone_attention_mask": (b_min, 1),  # Min: 1 token
     }
     opt_shapes = {
-        "sa_embs": (1, 51, 1536),  # Typical: 51 tokens
-        "vl_embs": (1, 122, 2048),  # Typical: 122 tokens
-        "timestep": (1,),
-        "image_mask": (1, 122),  # Typical: 122 tokens
-        "backbone_attention_mask": (1, 122),  # Typical: 122 tokens
+        "sa_embs": (b_opt, 51, 1536),  # Typical: 51 tokens
+        "vl_embs": (b_opt, 122, 2048),  # Typical: 122 tokens
+        "timestep": (b_opt,),
+        "image_mask": (b_opt, 122),  # Typical: 122 tokens
+        "backbone_attention_mask": (b_opt, 122),  # Typical: 122 tokens
     }
     max_shapes = {
-        "sa_embs": (1, 256, 1536),  # Max: 256 tokens (generous)
-        "vl_embs": (1, 512, 2048),  # Max: 512 tokens (generous)
-        "timestep": (1,),
-        "image_mask": (1, 512),  # Max: 512 tokens
-        "backbone_attention_mask": (1, 512),  # Max: 512 tokens
+        "sa_embs": (b_max, 256, 1536),  # Max: 256 tokens (generous)
+        "vl_embs": (b_max, 512, 2048),  # Max: 512 tokens (generous)
+        "timestep": (b_max,),
+        "image_mask": (b_max, 512),  # Max: 512 tokens
+        "backbone_attention_mask": (b_max, 512),  # Max: 512 tokens
     }
 
     build_engine(
