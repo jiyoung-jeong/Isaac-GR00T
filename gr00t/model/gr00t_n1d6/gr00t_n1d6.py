@@ -7,6 +7,7 @@ from gr00t.model.modules.embodiment_conditioned_mlp import (
     CategorySpecificMLP,
     MultiEmbodimentActionEncoder,
 )
+from gr00t.utils.nvtx import nvtx_range
 import torch
 from torch import nn
 from torch.distributions import Beta
@@ -166,86 +167,88 @@ class Gr00tN1d6ActionHead(nn.Module):
         # Set frozen modules to eval
         self.set_frozen_modules_to_eval_mode()
 
-        backbone_output = self.process_backbone_output(backbone_output)
+        with nvtx_range("VLA/action_head/train"):
+            backbone_output = self.process_backbone_output(backbone_output)
 
-        # Get vision and language embeddings.
-        vl_embeds = backbone_output.backbone_features
-        device = vl_embeds.device
+            # Get vision and language embeddings.
+            vl_embeds = backbone_output.backbone_features
+            device = vl_embeds.device
 
-        # Get embodiment ID.
-        embodiment_id = action_input.embodiment_id
+            # Get embodiment ID.
+            embodiment_id = action_input.embodiment_id
 
-        # Embed state.
-        state_features = self.state_encoder(action_input.state, embodiment_id)
+            # Embed state.
+            state_features = self.state_encoder(action_input.state, embodiment_id)
 
-        # Dropout state features.
-        if self.state_dropout_prob > 0:
-            do_dropout = (
-                torch.rand(state_features.shape[0], device=state_features.device)
-                < self.state_dropout_prob
-            )
-            do_dropout = do_dropout[:, None, None].to(dtype=state_features.dtype)
-            state_features = state_features * (1 - do_dropout) + self.mask_token * do_dropout
+            # Dropout state features.
+            if self.state_dropout_prob > 0:
+                do_dropout = (
+                    torch.rand(state_features.shape[0], device=state_features.device)
+                    < self.state_dropout_prob
+                )
+                do_dropout = do_dropout[:, None, None].to(dtype=state_features.dtype)
+                state_features = state_features * (1 - do_dropout) + self.mask_token * do_dropout
 
-        # Add Gaussian noise to state features.
-        if self.training and self.state_additive_noise_scale > 0:
-            print(
-                f"Adding Gaussian noise to state features with scale {self.state_additive_noise_scale}"
-            )
-            noise = torch.randn_like(state_features) * self.state_additive_noise_scale
-            state_features = state_features + noise
+            # Add Gaussian noise to state features.
+            if self.training and self.state_additive_noise_scale > 0:
+                print(
+                    f"Adding Gaussian noise to state features with scale {self.state_additive_noise_scale}"
+                )
+                noise = torch.randn_like(state_features) * self.state_additive_noise_scale
+                state_features = state_features + noise
 
-        # Embed noised action trajectory.
-        actions = action_input.action
-        noise = torch.randn(actions.shape, device=actions.device, dtype=actions.dtype)
-        t = self.sample_time(actions.shape[0], device=actions.device, dtype=actions.dtype)
-        t = t[:, None, None]  # shape (B,1,1) for broadcast
+            # Embed noised action trajectory.
+            actions = action_input.action
+            noise = torch.randn(actions.shape, device=actions.device, dtype=actions.dtype)
+            t = self.sample_time(actions.shape[0], device=actions.device, dtype=actions.dtype)
+            t = t[:, None, None]  # shape (B,1,1) for broadcast
 
-        noisy_trajectory = (1 - t) * noise + t * actions
-        velocity = actions - noise
+            noisy_trajectory = (1 - t) * noise + t * actions
+            velocity = actions - noise
 
-        # Convert (continuous) t -> discrete if needed
-        t_discretized = (t[:, 0, 0] * self.num_timestep_buckets).long()
-        action_features = self.action_encoder(noisy_trajectory, t_discretized, embodiment_id)
+            # Convert (continuous) t -> discrete if needed
+            t_discretized = (t[:, 0, 0] * self.num_timestep_buckets).long()
+            action_features = self.action_encoder(noisy_trajectory, t_discretized, embodiment_id)
 
-        # Maybe add position embedding.
-        if self.config.add_pos_embed:
-            pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
-            pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
-            action_features = action_features + pos_embs
+            # Maybe add position embedding.
+            if self.config.add_pos_embed:
+                pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
+                pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
+                action_features = action_features + pos_embs
 
-        # Join vision, language, state and action embedding along sequence dimension.
-        sa_embs = torch.cat((state_features, action_features), dim=1)
-        vl_attn_mask = backbone_output.backbone_attention_mask
+            # Join vision, language, state and action embedding along sequence dimension.
+            sa_embs = torch.cat((state_features, action_features), dim=1)
+            vl_attn_mask = backbone_output.backbone_attention_mask
 
-        if self.config.use_alternate_vl_dit:
-            image_mask = backbone_output.image_mask
-            backbone_attention_mask = backbone_output.backbone_attention_mask
-            model_output, _ = self.model(
-                hidden_states=sa_embs,
-                encoder_hidden_states=vl_embeds,
-                encoder_attention_mask=vl_attn_mask,
-                timestep=t_discretized,
-                return_all_hidden_states=True,
-                image_mask=image_mask,
-                backbone_attention_mask=backbone_attention_mask,
-            )
-        else:
-            model_output, _ = self.model(
-                hidden_states=sa_embs,
-                encoder_hidden_states=vl_embeds,
-                encoder_attention_mask=vl_attn_mask,
-                timestep=t_discretized,
-                return_all_hidden_states=True,
-            )
+            with nvtx_range("VLA/action_head/DiT"):
+                if self.config.use_alternate_vl_dit:
+                    image_mask = backbone_output.image_mask
+                    backbone_attention_mask = backbone_output.backbone_attention_mask
+                    model_output, _ = self.model(
+                        hidden_states=sa_embs,
+                        encoder_hidden_states=vl_embeds,
+                        encoder_attention_mask=vl_attn_mask,
+                        timestep=t_discretized,
+                        return_all_hidden_states=True,
+                        image_mask=image_mask,
+                        backbone_attention_mask=backbone_attention_mask,
+                    )
+                else:
+                    model_output, _ = self.model(
+                        hidden_states=sa_embs,
+                        encoder_hidden_states=vl_embeds,
+                        encoder_attention_mask=vl_attn_mask,
+                        timestep=t_discretized,
+                        return_all_hidden_states=True,
+                    )
 
-        pred = self.action_decoder(model_output, embodiment_id)
-        pred_actions = pred[:, -actions.shape[1] :]
+            pred = self.action_decoder(model_output, embodiment_id)
+            pred_actions = pred[:, -actions.shape[1] :]
 
-        # Slice out only the action portion of pred and target.
-        action_mask = action_input.action_mask
-        action_loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
-        loss = action_loss.sum() / (action_mask.sum() + 1e-6)
+            # Slice out only the action portion of pred and target.
+            action_mask = action_input.action_mask
+            action_loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
+            loss = action_loss.sum() / (action_mask.sum() + 1e-6)
 
         return {
             "loss": loss,
@@ -316,45 +319,49 @@ class Gr00tN1d6ActionHead(nn.Module):
         dt = 1.0 / self.num_inference_timesteps
 
         # Run denoising steps.
-        for t in range(self.num_inference_timesteps):
-            t_cont = t / float(self.num_inference_timesteps)  # e.g. goes 0, 1/N, 2/N, ...
-            t_discretized = int(t_cont * self.num_timestep_buckets)
+        with nvtx_range("VLA/action_head/inference"):
+            for t in range(self.num_inference_timesteps):
+                t_cont = t / float(self.num_inference_timesteps)  # e.g. goes 0, 1/N, 2/N, ...
+                t_discretized = int(t_cont * self.num_timestep_buckets)
 
-            # Embed noised action trajectory.
-            timesteps_tensor = torch.full(
-                size=(batch_size,), fill_value=t_discretized, device=device
-            )
-            action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
-            # Add position embedding.
-            if self.config.add_pos_embed:
-                pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
-                pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
-                action_features = action_features + pos_embs
-
-            # Join vision, language, state and action embedding along sequence dimension.
-            sa_embs = torch.cat((state_features, action_features), dim=1)
-
-            # Run model forward.
-            if self.config.use_alternate_vl_dit:
-                model_output = self.model(
-                    hidden_states=sa_embs,
-                    encoder_hidden_states=vl_embeds,
-                    timestep=timesteps_tensor,
-                    image_mask=backbone_output.image_mask,
-                    backbone_attention_mask=backbone_output.backbone_attention_mask,
+                # Embed noised action trajectory.
+                timesteps_tensor = torch.full(
+                    size=(batch_size,), fill_value=t_discretized, device=device
                 )
-            else:
-                model_output = self.model(
-                    hidden_states=sa_embs,
-                    encoder_hidden_states=vl_embeds,
-                    timestep=timesteps_tensor,
-                )
-            pred = self.action_decoder(model_output, embodiment_id)
+                action_features = self.action_encoder(actions, timesteps_tensor, embodiment_id)
+                # Add position embedding.
+                if self.config.add_pos_embed:
+                    pos_ids = torch.arange(
+                        action_features.shape[1], dtype=torch.long, device=device
+                    )
+                    pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
+                    action_features = action_features + pos_embs
 
-            pred_velocity = pred[:, -self.action_horizon :]
+                # Join vision, language, state and action embedding along sequence dimension.
+                sa_embs = torch.cat((state_features, action_features), dim=1)
 
-            # Update actions using euler integration.
-            actions = actions + dt * pred_velocity
+                # Run model forward.
+                with nvtx_range("VLA/action_head/DiT_step"):
+                    if self.config.use_alternate_vl_dit:
+                        model_output = self.model(
+                            hidden_states=sa_embs,
+                            encoder_hidden_states=vl_embeds,
+                            timestep=timesteps_tensor,
+                            image_mask=backbone_output.image_mask,
+                            backbone_attention_mask=backbone_output.backbone_attention_mask,
+                        )
+                    else:
+                        model_output = self.model(
+                            hidden_states=sa_embs,
+                            encoder_hidden_states=vl_embeds,
+                            timestep=timesteps_tensor,
+                        )
+                pred = self.action_decoder(model_output, embodiment_id)
+
+                pred_velocity = pred[:, -self.action_horizon :]
+
+                # Update actions using euler integration.
+                actions = actions + dt * pred_velocity
         return BatchFeature(
             data={
                 "action_pred": actions,
@@ -380,13 +387,14 @@ class Gr00tN1d6ActionHead(nn.Module):
             BatchFeature containing:
                 - action_pred: [B, action_horizon, action_dim] predicted actions
         """
-        features = self._encode_features(backbone_output, action_input)
-        return self.get_action_with_features(
-            backbone_features=features.backbone_features,
-            state_features=features.state_features,
-            embodiment_id=action_input.embodiment_id,
-            backbone_output=backbone_output,
-        )
+        with nvtx_range("VLA/action_head"):
+            features = self._encode_features(backbone_output, action_input)
+            return self.get_action_with_features(
+                backbone_features=features.backbone_features,
+                state_features=features.state_features,
+                embodiment_id=action_input.embodiment_id,
+                backbone_output=backbone_output,
+            )
 
     @property
     def device(self):
@@ -507,8 +515,9 @@ class Gr00tN1d6(PreTrainedModel):
         """
         # Prepare inputs for backbone and action head
         backbone_inputs, action_inputs = self.prepare_input(inputs)
-        backbone_outputs = self.backbone(backbone_inputs)
-        action_outputs = self.action_head(backbone_outputs, action_inputs)
+        with nvtx_range("VLA/full_forward"):
+            backbone_outputs = self.backbone(backbone_inputs)
+            action_outputs = self.action_head(backbone_outputs, action_inputs)
 
         return action_outputs
 
@@ -520,8 +529,9 @@ class Gr00tN1d6(PreTrainedModel):
         backbone_inputs, action_inputs = self.prepare_input(inputs)
 
         # Forward through backbone
-        backbone_outputs = self.backbone(backbone_inputs)
-        action_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
+        with nvtx_range("VLA/get_action"):
+            backbone_outputs = self.backbone(backbone_inputs)
+            action_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
 
         return action_outputs
 

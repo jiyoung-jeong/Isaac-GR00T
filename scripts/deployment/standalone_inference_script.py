@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 import logging
@@ -21,6 +22,22 @@ import numpy as np
 import pandas as pd
 import torch
 import tyro
+
+try:
+    from gr00t.utils.nvtx import nvtx_range
+except ModuleNotFoundError:
+
+    @contextmanager
+    def nvtx_range(name: str):
+        pushed = False
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.nvtx.range_push(name)
+                pushed = True
+            yield
+        finally:
+            if pushed:
+                torch.cuda.nvtx.range_pop()
 
 
 warnings.simplefilter("ignore", category=FutureWarning)
@@ -106,46 +123,51 @@ class TensorRTDiTWrapper:
 
     def __call__(self, sa_embs, vl_embs, timestep, image_mask=None, backbone_attention_mask=None):
         """Forward pass through TensorRT DiT."""
-        # Setup context bindings
-        sa_embs = sa_embs.to(f"cuda:{self.device}").contiguous()
-        vl_embs = vl_embs.to(f"cuda:{self.device}").contiguous()
-        timestep = timestep.to(f"cuda:{self.device}").contiguous()  # Keep as int64
+        with nvtx_range("VLA/action_head/TensorRT"):
+            # Setup context bindings
+            sa_embs = sa_embs.to(f"cuda:{self.device}").contiguous()
+            vl_embs = vl_embs.to(f"cuda:{self.device}").contiguous()
+            timestep = timestep.to(f"cuda:{self.device}").contiguous()  # Keep as int64
 
-        if image_mask is not None:
-            image_mask = image_mask.to(f"cuda:{self.device}").contiguous()
-        if backbone_attention_mask is not None:
-            backbone_attention_mask = backbone_attention_mask.to(f"cuda:{self.device}").contiguous()
+            if image_mask is not None:
+                image_mask = image_mask.to(f"cuda:{self.device}").contiguous()
+            if backbone_attention_mask is not None:
+                backbone_attention_mask = backbone_attention_mask.to(
+                    f"cuda:{self.device}"
+                ).contiguous()
 
-        self._set_input_shape_checked("sa_embs", sa_embs.shape)
-        self._set_input_shape_checked("vl_embs", vl_embs.shape)
-        self._set_input_shape_checked("timestep", timestep.shape)
-        if image_mask is not None:
-            self._set_input_shape_checked("image_mask", image_mask.shape)
-        if backbone_attention_mask is not None:
-            self._set_input_shape_checked("backbone_attention_mask", backbone_attention_mask.shape)
+            self._set_input_shape_checked("sa_embs", sa_embs.shape)
+            self._set_input_shape_checked("vl_embs", vl_embs.shape)
+            self._set_input_shape_checked("timestep", timestep.shape)
+            if image_mask is not None:
+                self._set_input_shape_checked("image_mask", image_mask.shape)
+            if backbone_attention_mask is not None:
+                self._set_input_shape_checked("backbone_attention_mask", backbone_attention_mask.shape)
 
-        self.context.set_tensor_address("sa_embs", sa_embs.data_ptr())
-        self.context.set_tensor_address("vl_embs", vl_embs.data_ptr())
-        self.context.set_tensor_address("timestep", timestep.data_ptr())
-        if image_mask is not None:
-            self.context.set_tensor_address("image_mask", image_mask.data_ptr())
-        if backbone_attention_mask is not None:
-            self.context.set_tensor_address(
-                "backbone_attention_mask", backbone_attention_mask.data_ptr()
+            self.context.set_tensor_address("sa_embs", sa_embs.data_ptr())
+            self.context.set_tensor_address("vl_embs", vl_embs.data_ptr())
+            self.context.set_tensor_address("timestep", timestep.data_ptr())
+            if image_mask is not None:
+                self.context.set_tensor_address("image_mask", image_mask.data_ptr())
+            if backbone_attention_mask is not None:
+                self.context.set_tensor_address(
+                    "backbone_attention_mask", backbone_attention_mask.data_ptr()
+                )
+
+            # Output in BF16 (matches ONNX export and engine precision)
+            output_shape = self.context.get_tensor_shape("output")
+            output = torch.empty(
+                tuple(output_shape), dtype=torch.bfloat16, device=f"cuda:{self.device}"
             )
 
-        # Output in BF16 (matches ONNX export and engine precision)
-        output_shape = self.context.get_tensor_shape("output")
-        output = torch.empty(
-            tuple(output_shape), dtype=torch.bfloat16, device=f"cuda:{self.device}"
-        )
-        self.context.set_tensor_address("output", output.data_ptr())
+            self.context.set_tensor_address("output", output.data_ptr())
 
-        success = self.context.execute_async_v3(torch.cuda.current_stream().cuda_stream)
-        if not success:
-            raise RuntimeError("TensorRT inference failed")
+            with nvtx_range("VLA/action_head/TensorRT_enqueue"):
+                success = self.context.execute_async_v3(torch.cuda.current_stream().cuda_stream)
+            if not success:
+                raise RuntimeError("TensorRT inference failed")
 
-        return output
+            return output
 
     def _set_input_shape_checked(self, tensor_name: str, shape) -> None:
         shape_tuple = tuple(int(v) for v in shape)

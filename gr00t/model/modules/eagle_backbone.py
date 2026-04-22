@@ -1,5 +1,6 @@
 import os
 
+from gr00t.utils.nvtx import nvtx_range, wrap_nvtx_range
 import torch
 from transformers import AutoConfig, AutoModel
 from transformers.feature_extraction_utils import BatchFeature
@@ -53,6 +54,7 @@ class EagleBackbone(torch.nn.Module):
             self.model.language_model.model.layers.pop(-1)
 
         self.select_layer = select_layer
+        self._install_nvtx_ranges()
         self.set_trainable_parameters(tune_llm, tune_visual, tune_top_llm_layers)
         if load_bf16 and trainable_params_fp32:
             # cast trainable parameters to fp32
@@ -60,6 +62,21 @@ class EagleBackbone(torch.nn.Module):
                 if p.requires_grad:
                     p.data = p.data.to(torch.float32)
                     print(f"Casting trainable parameter {n} to fp32")
+
+    def _install_nvtx_ranges(self):
+        if hasattr(self.model, "extract_feature") and not getattr(
+            self.model.extract_feature, "_gr00t_nvtx_wrapped", False
+        ):
+            self.model.extract_feature = wrap_nvtx_range(self.model.extract_feature, "VLA/ViT")
+            self.model.extract_feature._gr00t_nvtx_wrapped = True
+
+        if hasattr(self.model, "language_model") and not getattr(
+            self.model.language_model.forward, "_gr00t_nvtx_wrapped", False
+        ):
+            self.model.language_model.forward = wrap_nvtx_range(
+                self.model.language_model.forward, "VLA/LLM"
+            )
+            self.model.language_model.forward._gr00t_nvtx_wrapped = True
 
     def set_trainable_parameters(self, tune_llm: bool, tune_visual: bool, tune_top_llm_layers: int):
         self.tune_llm = tune_llm
@@ -107,7 +124,8 @@ class EagleBackbone(torch.nn.Module):
         # 0. Set frozen module to eval
         keys_to_use = ["input_ids", "attention_mask", "pixel_values"]
         vl_input = {k: vl_input[k] for k in keys_to_use}
-        outputs = self.model(**vl_input, output_hidden_states=True)
+        with nvtx_range("VLA/backbone"):
+            outputs = self.model(**vl_input, output_hidden_states=True)
         outputs = outputs["hidden_states"][-1]
         image_mask = vl_input["input_ids"] == self.model.config.image_token_index
         attention_mask = vl_input["attention_mask"] == 1
