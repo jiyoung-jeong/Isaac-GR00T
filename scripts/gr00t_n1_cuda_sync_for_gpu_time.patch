@@ -1,0 +1,20 @@
+# get_action()에서 END 로그 직전에 torch.cuda.synchronize() 추가
+# → POLICY_INFER_START~END 구간이 "GPU가 실제로 돈 시간"과 맞음 (Nsight ~169ms와 일치 기대)
+
+--- a/gr00t/model/gr00t_n1.py
++++ b/gr00t/model/gr00t_n1.py
+@@ -191,6 +191,7 @@ class Gr00tN1_5(PreTrainedModel):
+         log_nvtx_range("BACKBONE_START")
+         # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
+         backbone_outputs = self.backbone(backbone_inputs)
++        torch.cuda.synchronize()  # GPU 구간이 끝날 때까지 대기 → 전력/구간 측정이 GPU 실행 시간과 맞도록
+         log_nvtx_range("BACKBONE_END")
+         torch.cuda.nvtx.range_pop()
+         # [NVTX] 끝
+@@ -199,6 +200,7 @@ class Gr00tN1_5(PreTrainedModel):
+         log_nvtx_range("ACTION_HEAD_START")
+         action_head_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
++        torch.cuda.synchronize()  # GPU 구간이 끝날 때까지 대기
+         log_nvtx_range("ACTION_HEAD_END")
+         torch.cuda.nvtx.range_pop()
+         # [NVTX] 끝

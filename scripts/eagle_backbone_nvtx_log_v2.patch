@@ -1,0 +1,15 @@
+--- a/gr00t/model/backbone/eagle_backbone.py
++++ b/gr00t/model/backbone/eagle_backbone.py
+@@ -75,11 +75,13 @@ class EagleBackbone(nn.Module):
+                 original_forward = module.forward
+                 def wrapped_forward(*args, **kwargs):
+                     torch.cuda.nvtx.range_push(name)
++                    log_nvtx_range(f"{name}_START")
+                     try:
+                         return original_forward(*args, **kwargs)
+                     finally:
++                        log_nvtx_range(f"{name}_END")
+                         torch.cuda.nvtx.range_pop()
+                 module.forward = wrapped_forward
+                 module._nvtx_wrapped = True
+                 print(f"[Profiling] Installed NVTX hook for {name}")

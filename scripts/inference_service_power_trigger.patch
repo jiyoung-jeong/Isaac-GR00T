@@ -1,0 +1,36 @@
+--- a/scripts/inference_service.py
++++ b/scripts/inference_service.py
+@@ -54,6 +54,8 @@
+ """
+ 
++import os
+ import time
+ from dataclasses import dataclass
++from pathlib import Path
+ from typing import Literal
+ 
+ import numpy as np
+@@ -217,12 +219,24 @@
+         target_method_name = "get_action" if hasattr(policy, "get_action") else "__call__"
+         original_method = getattr(policy, target_method_name)
+ 
++        # Thor 전력 측정: get_action 구간만 4ms 샘플링 트리거 (파일 생성/삭제)
++        _thor_trigger = Path(os.environ.get("THOR_INFERENCE_ACTIVE", "/tmp/thor_inference_active"))
++
+         # 우리가 만든 '스톱워치 포함' 가짜 함수
+         def profiled_inference(*args, **kwargs):
+             nvtx.range_push("Total_Policy_Inference") 
++            try:
++                _thor_trigger.touch()
++            except OSError:
++                pass
+             try:
+                 return original_method(*args, **kwargs)
+             finally:
++                try:
++                    _thor_trigger.unlink(missing_ok=True)
++                except OSError:
++                    pass
+                 nvtx.range_pop()
+ 
+         setattr(policy, target_method_name, profiled_inference)

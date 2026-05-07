@@ -24,6 +24,14 @@ runs/
 out/
 recordings/
 plots/
+analysis_out/
+analysis_out_gotrash/
+experiment_data/
+nsys_runs/
+thor_measurements/
+gr00t_onnx/
+gr00t_engine/
+gr00t_engine_layer_12/
 *.npz
 
 # C extensions
@@ -134,6 +142,7 @@ cython_debug/
 # OS / editor junk
 .DS_Store
 *.code-workspace
+*.orig
 
 # Virtual environments
 .venv/

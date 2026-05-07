@@ -444,10 +444,13 @@ def run_gr00t_sim_policy(
     policy_client_port: int | None = None,
     n_envs: int = 8,
     n_action_steps: int = 8,
+    disable_video: bool = False,
 ):
     embodiment_tag = get_embodiment_tag_from_env_name(env_name)
 
-    if model_path:
+    if disable_video:
+        video_dir = None
+    elif model_path:
         video_dir = (
             f"/tmp/sim_eval_videos_{model_path.replace('/', '_')}_ac{n_action_steps}_{uuid.uuid4()}"
         )
@@ -478,7 +481,10 @@ def run_gr00t_sim_policy(
         n_episodes=n_episodes,
         n_envs=n_envs,
     )
-    print("Video saved to: ", wrapper_configs.video.video_dir)
+    if wrapper_configs.video.video_dir is not None:
+        print("Video saved to: ", wrapper_configs.video.video_dir)
+    else:
+        print("Video saving disabled.")
     return results
 
 
@@ -500,6 +506,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--n_envs", type=int, default=8)
     parser.add_argument("--n_action_steps", type=int, default=8)
+    parser.add_argument("--disable-video", action="store_true")
 
     args = parser.parse_args()
 
@@ -522,6 +529,7 @@ if __name__ == "__main__":
         policy_client_port=args.policy_client_port,
         n_envs=args.n_envs,
         n_action_steps=args.n_action_steps,
+        disable_video=args.disable_video,
     )
     print("results: ", results)
     print("success rate: ", np.mean(results[1]))

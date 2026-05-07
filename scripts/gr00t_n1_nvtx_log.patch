@@ -1,0 +1,24 @@
+--- a/gr00t/model/gr00t_n1.py
++++ b/gr00t/model/gr00t_n1.py
+@@ -25,6 +25,8 @@ from transformers import AutoConfig, AutoModel, PretrainedConfig, PreTrainedModel
+ from transformers.feature_extraction_utils import BatchFeature
+ 
++from gr00t.eval.nvtx_range_logger import log_nvtx_range
++
+ from .action_head.flow_matching_action_head import (
+     FlowmatchingActionHead,
+     FlowmatchingActionHeadConfig,
+@@ -186,11 +188,15 @@ class Gr00tN1_5(PreTrainedModel):
+         # [NVTX] Backbone (ViT + LLM) 프로파일링 시작
+         torch.cuda.nvtx.range_push("Backbone_Inference")
++        log_nvtx_range("BACKBONE_START")
+         backbone_outputs = self.backbone(backbone_inputs)
++        log_nvtx_range("BACKBONE_END")
+         torch.cuda.nvtx.range_pop()
+ 
+         # [NVTX] ActionHead (Diffusion) 프로파일링 시작
+         torch.cuda.nvtx.range_push("ActionHead_Inference")
++        log_nvtx_range("ACTION_HEAD_START")
+         action_head_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
++        log_nvtx_range("ACTION_HEAD_END")
+         torch.cuda.nvtx.range_pop()

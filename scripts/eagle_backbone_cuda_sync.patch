@@ -1,0 +1,13 @@
+# wrap_module 내부: _END 로그 직전에 torch.cuda.synchronize() 추가
+# → ViT / Projector / LLM 구간이 GPU 실행 시간과 맞음
+
+--- a/gr00t/model/backbone/eagle_backbone.py
++++ b/gr00t/model/backbone/eagle_backbone.py
+@@ -78,6 +78,7 @@ class EagleBackbone(nn.Module):
+                     try:
+                         return original_forward(*args, **kwargs)
+                     finally:
++                        torch.cuda.synchronize()  # GPU 구간 끝날 때까지 대기 → ViT/LLM/Projector 구간이 GPU 실행 시간과 맞도록
+                         log_nvtx_range(f"{name}_END")
+                         torch.cuda.nvtx.range_pop()
+                 module.forward = wrapped_forward
