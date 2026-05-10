@@ -10,6 +10,11 @@ import pandas as pd
 
 
 HERE = Path(__file__).resolve().parent
+DEFAULT_DISPLAY_HZ = {
+    "cpu": 2_601_000_000,
+    "gpu": 1_575_000_000,
+    "emc": 3_200_000_000,
+}
 
 
 def fmt_freq(hz: float) -> str:
@@ -20,13 +25,23 @@ def fmt_freq(hz: float) -> str:
     return f"{hz / 1_000_000:.0f}MHz"
 
 
+def display_freq(row: pd.Series, key: str) -> str:
+    requested = float(row[f"requested_{key}_hz"])
+    if requested >= 0:
+        return fmt_freq(requested)
+    actual = float(row.get(f"actual_{key}_hz", -1))
+    if actual > 0:
+        return fmt_freq(actual)
+    return fmt_freq(DEFAULT_DISPLAY_HZ[key])
+
+
 def combo_freq_label(row: pd.Series, title: str) -> str:
     return "\n".join(
         [
             title,
-            f"CPU {fmt_freq(float(row['requested_cpu_hz']))}",
-            f"GPU {fmt_freq(float(row['requested_gpu_hz']))}",
-            f"EMC {fmt_freq(float(row['requested_emc_hz']))}",
+            f"CPU {display_freq(row, 'cpu')}",
+            f"GPU {display_freq(row, 'gpu')}",
+            f"EMC {display_freq(row, 'emc')}",
         ]
     )
 
