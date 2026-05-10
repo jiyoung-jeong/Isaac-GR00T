@@ -15,6 +15,10 @@ DEFAULT_DISPLAY_HZ = {
     "gpu": 1_575_000_000,
     "emc": 3_200_000_000,
 }
+ALL_DEFAULT = {
+    "get_action_latency_ms": 92.25,
+    "vin_energy_j": 3136.24,
+}
 
 
 def fmt_freq(hz: float) -> str:
@@ -72,10 +76,26 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(11, 6.5))
     ax.scatter(summary["get_action_latency_ms"], summary["vin_energy_j"], s=25, c="0.75", alpha=0.8)
     ax.plot(pareto["get_action_latency_ms"], pareto["vin_energy_j"], "-o", color="crimson", lw=2, ms=5)
+    ax.scatter(
+        [ALL_DEFAULT["get_action_latency_ms"]],
+        [ALL_DEFAULT["vin_energy_j"]],
+        c="royalblue",
+        s=45,
+        zorder=5,
+    )
     ax.scatter([best_latency["get_action_latency_ms"]], [best_latency["vin_energy_j"]], c="darkgreen", s=45, zorder=5)
     ax.scatter([best_energy["get_action_latency_ms"]], [best_energy["vin_energy_j"]], c="purple", s=45, zorder=5)
     ax.scatter([best_tradeoff["get_action_latency_ms"]], [best_tradeoff["vin_energy_j"]], c="darkorange", s=45, zorder=5)
 
+    label_box(
+        ax,
+        ALL_DEFAULT["get_action_latency_ms"],
+        ALL_DEFAULT["vin_energy_j"],
+        "All-default",
+        dx=-8,
+        dy=18,
+        ha="right",
+    )
     label_box(
         ax,
         best_latency["get_action_latency_ms"],
@@ -103,7 +123,7 @@ def main() -> None:
 
     ax.set_xlabel("VLA/get_action Latency (ms)")
     ax.set_ylabel("Total VIN Energy (J)")
-    ax.set_title("Pareto Front: Latency vs Total VIN Energy (All-default removed)")
+    ax.set_title("Pareto Front: Latency vs Total VIN Energy (All-default shown)")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
     fig.savefig(HERE / "pareto_latency_energy.png", dpi=180)

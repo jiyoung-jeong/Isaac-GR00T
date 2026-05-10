@@ -1,12 +1,17 @@
 # LIBERO-Spatial Pareto (All-default removed)
 
 - source root: `/home/Thor/Workspace/jyjeong/Isaac-GR00T/thor_measurements/combo_sweep_vla_auto_20260427_091937`
-- removed run: `mode == default` only
+- Pareto/best recomputed on non-all-default combos only
+- all-default point shown for reference
 - remaining rows: `314`
 - pareto rows: `7`
 - figure outputs: `pareto_latency_energy.png`, `pareto_latency_energy.pdf`
 - figure script: `make_pareto_latency_energy.py`
 - measurement scripts: `source_scripts/thor_combofreq_remote_client_sweep.sh`, `source_scripts/thor_combofreq_power_sweep.py`
+
+## All-default
+- latency: `92.25 ms`
+- energy: `3136.24 J`
 
 ## Best latency
 - combo: `cpufreq_2.601GHz_gpufreq_default_emcfreq_default`
