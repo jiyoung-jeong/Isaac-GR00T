@@ -45,10 +45,10 @@ def make_text_annotated(df: pd.DataFrame, out_path: Path) -> None:
     # Separate the annotation boxes by denoising layer. The lines are close for
     # d=1 and d=2, so small symmetric offsets make the labels collide.
     offsets = {
-        1: [(22, -22), (-10, -22), (-10, -22), (-16, -22)],
+        1: [(22, -14), (-10, -14), (-10, -14), (-16, -14)],
         2: [(22, 14), (8, 14), (8, 14), (12, 14)],
-        4: [(22, 18), (-8, 18), (-8, 18), (-12, 18)],
-        8: [(22, -20), (8, -20), (8, -20), (12, -20)],
+        4: [(22, 12), (-8, 12), (-8, 12), (-12, 12)],
+        8: [(22, -12), (8, -12), (8, -12), (12, -12)],
     }
 
     for r, selection in enumerate(SELECTIONS):
