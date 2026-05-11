@@ -42,19 +42,13 @@ def save_all(fig: plt.Figure, out_path: Path) -> None:
 def make_text_annotated(df: pd.DataFrame, out_path: Path) -> None:
     fig, axes = plt.subplots(3, 2, figsize=(13, 11), constrained_layout=True)
 
+    # Separate the annotation boxes by denoising layer. The lines are close for
+    # d=1 and d=2, so small symmetric offsets make the labels collide.
     offsets = {
-        ("best_latency", 1): [(-6, 10), (-6, 8), (-8, 8), (-14, 8)],
-        ("best_latency", 2): [(6, -20), (6, -18), (6, -18), (10, -18)],
-        ("best_latency", 4): [(-8, 10), (-8, 10), (-8, 10), (-12, 10)],
-        ("best_latency", 8): [(6, -20), (8, -18), (8, -18), (10, -18)],
-        ("best_energy", 1): [(-6, 10), (-6, 8), (-8, 8), (-12, 8)],
-        ("best_energy", 2): [(6, -20), (8, -18), (8, -18), (10, -18)],
-        ("best_energy", 4): [(-8, 10), (-8, 10), (-8, 10), (-12, 10)],
-        ("best_energy", 8): [(6, -20), (8, -18), (8, -18), (10, -18)],
-        ("best_tradeoff", 1): [(-6, 10), (-6, 8), (-8, 8), (-12, 8)],
-        ("best_tradeoff", 2): [(6, -20), (8, -18), (8, -18), (10, -18)],
-        ("best_tradeoff", 4): [(-8, 10), (-8, 10), (-8, 10), (-12, 10)],
-        ("best_tradeoff", 8): [(6, -20), (8, -18), (8, -18), (10, -18)],
+        1: [(-10, -22), (-10, -22), (-10, -22), (-16, -22)],
+        2: [(8, 14), (8, 14), (8, 14), (12, 14)],
+        4: [(-8, 18), (-8, 18), (-8, 18), (-12, 18)],
+        8: [(8, -20), (8, -20), (8, -20), (12, -20)],
     }
 
     for r, selection in enumerate(SELECTIONS):
@@ -86,7 +80,7 @@ def make_text_annotated(df: pd.DataFrame, out_path: Path) -> None:
                 for i, (_, row) in enumerate(dsub.iterrows()):
                     if pd.isna(row[metric_mean]):
                         continue
-                    dx, dy = offsets[(selection, denoise)][i]
+                    dx, dy = offsets[denoise][i]
                     ax.annotate(
                         fmt_freq(row),
                         xy=(TEXT_X[i], row[metric_mean]),
@@ -99,12 +93,13 @@ def make_text_annotated(df: pd.DataFrame, out_path: Path) -> None:
                     )
             if all_y:
                 ymin, ymax = min(all_y), max(all_y)
-                pad_low = (ymax - ymin) * 0.22 if ymax > ymin else ymax * 0.08
-                pad_high = (ymax - ymin) * 0.12 if ymax > ymin else ymax * 0.08
+                pad_low = (ymax - ymin) * 0.35 if ymax > ymin else ymax * 0.12
+                pad_high = (ymax - ymin) * 0.20 if ymax > ymin else ymax * 0.12
                 ax.set_ylim(ymin - pad_low, ymax + pad_high)
             ax.set_title(f"{selection}: {suffix}", fontsize=11)
             ax.set_xlabel("Text length (words)")
             ax.set_ylabel(ylabel)
+            ax.set_xlim(0, 270)
             ax.set_xticks(TEXT_X)
             ax.grid(True, alpha=0.22)
             ax.legend(loc="upper left", ncol=4, frameon=True, fontsize=8)
