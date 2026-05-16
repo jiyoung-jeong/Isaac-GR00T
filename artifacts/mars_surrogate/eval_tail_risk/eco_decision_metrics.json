@@ -1,0 +1,12 @@
+{
+  "strict_success_rate": 0.3125,
+  "deadline_miss_rate": 0.6875,
+  "mean_energy_regret_j": 0.21283629387293446,
+  "mean_energy_regret_pct": 2.5908388192800658,
+  "mean_latency_regret_ms": 4.422608875000002,
+  "top1_match_rate": 0.0625,
+  "n_groups": 16,
+  "oracle_possible_groups": 12,
+  "selector_success_among_oracle_possible_groups": 0.4166666666666667,
+  "strict_deadline_success_rate": 0.3125
+}

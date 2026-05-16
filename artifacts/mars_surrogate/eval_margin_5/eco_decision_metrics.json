@@ -1,0 +1,8 @@
+{
+  "mean_energy_regret_j": 0.2627285550047784,
+  "mean_energy_regret_pct": 3.2063464214811184,
+  "mean_latency_regret_ms": 3.8972266250000023,
+  "strict_deadline_success_rate": 0.375,
+  "top1_match_rate": 0.0625,
+  "n_groups": 16
+}

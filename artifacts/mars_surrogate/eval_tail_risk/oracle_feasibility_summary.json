@@ -1,0 +1,6 @@
+{
+  "n_groups": 16,
+  "oracle_possible_groups": 12,
+  "oracle_possible_rate": 0.75,
+  "mean_num_strict_feasible_opps": 6.375
+}

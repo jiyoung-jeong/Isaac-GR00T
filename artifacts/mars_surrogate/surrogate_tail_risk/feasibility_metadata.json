@@ -1,0 +1,28 @@
+{
+  "model_type": "auto",
+  "resolved_model_type": "logistic_regression",
+  "feature_columns": [
+    "log1p_text_length_target",
+    "log1p_actual_text_words",
+    "log1p_input_token_count",
+    "denoising_steps",
+    "num_views",
+    "cpu_freq_ghz",
+    "gpu_freq_ghz",
+    "emc_freq_ghz",
+    "inv_cpu_freq_ghz",
+    "inv_gpu_freq_ghz",
+    "inv_emc_freq_ghz",
+    "denoising_over_gpu",
+    "denoising_over_emc",
+    "text_over_cpu",
+    "text_over_gpu",
+    "views_over_emc",
+    "denoising_times_text",
+    "denoising_times_views",
+    "gpu_times_emc",
+    "cpu_times_gpu",
+    "fixed_period_ms"
+  ],
+  "target": "fixed_period_deadline_miss_pct == 0"
+}

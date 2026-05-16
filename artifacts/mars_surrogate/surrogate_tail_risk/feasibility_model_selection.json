@@ -1,0 +1,70 @@
+{
+  "requested_model": "auto",
+  "selected_model": "logistic_regression",
+  "selection_score": 0.3116883116883117,
+  "candidates": [
+    {
+      "model_type": "logistic_regression",
+      "score": 0.3116883116883117,
+      "metrics": {
+        "accuracy": 0.8850325379609545,
+        "precision": 0.18461538461538463,
+        "recall": 1.0,
+        "f1": 0.3116883116883117,
+        "confusion_matrix": [
+          [
+            396,
+            53
+          ],
+          [
+            0,
+            12
+          ]
+        ],
+        "roc_auc": 0.959539717891611
+      }
+    },
+    {
+      "model_type": "random_forest_classifier",
+      "score": 0.2857142857142857,
+      "metrics": {
+        "accuracy": 0.9674620390455532,
+        "precision": 0.3333333333333333,
+        "recall": 0.25,
+        "f1": 0.2857142857142857,
+        "confusion_matrix": [
+          [
+            443,
+            6
+          ],
+          [
+            9,
+            3
+          ]
+        ],
+        "roc_auc": 0.9555493689680772
+      }
+    },
+    {
+      "model_type": "gbdt_classifier",
+      "score": 0.2857142857142857,
+      "metrics": {
+        "accuracy": 0.9674620390455532,
+        "precision": 0.3333333333333333,
+        "recall": 0.25,
+        "f1": 0.2857142857142857,
+        "confusion_matrix": [
+          [
+            443,
+            6
+          ],
+          [
+            9,
+            3
+          ]
+        ],
+        "roc_auc": 0.93634001484781
+      }
+    }
+  ]
+}
