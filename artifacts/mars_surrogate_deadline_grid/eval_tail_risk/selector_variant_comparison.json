@@ -1,0 +1,122 @@
+{
+  "median_margin_0ms": {
+    "metrics": {
+      "strict_success_rate": 0.775,
+      "deadline_miss_rate": 0.225,
+      "mean_energy_regret_j": 0.03462669272510664,
+      "mean_energy_regret_pct": 0.7399390182567952,
+      "mean_latency_regret_ms": -1.3582763875000015,
+      "top1_match_rate": 0.1,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.7948717948717948,
+      "strict_deadline_success_rate": 0.775
+    },
+    "n_decisions": 40
+  },
+  "median_margin_5ms": {
+    "metrics": {
+      "strict_success_rate": 0.95,
+      "deadline_miss_rate": 0.05,
+      "mean_energy_regret_j": 0.05783288740146063,
+      "mean_energy_regret_pct": 1.1744383662521756,
+      "mean_latency_regret_ms": -2.788908550000001,
+      "top1_match_rate": 0.05,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.9743589743589743,
+      "strict_deadline_success_rate": 0.95
+    },
+    "n_decisions": 40
+  },
+  "median_margin_10ms": {
+    "metrics": {
+      "strict_success_rate": 0.95,
+      "deadline_miss_rate": 0.05,
+      "mean_energy_regret_j": 0.09699299198781411,
+      "mean_energy_regret_pct": 1.9396254408150586,
+      "mean_latency_regret_ms": -4.588576637500002,
+      "top1_match_rate": 0.025,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.9743589743589743,
+      "strict_deadline_success_rate": 0.95
+    },
+    "n_decisions": 40
+  },
+  "median_margin_15ms": {
+    "metrics": {
+      "strict_success_rate": 0.925,
+      "deadline_miss_rate": 0.075,
+      "mean_energy_regret_j": 0.13983949251199188,
+      "mean_energy_regret_pct": 2.82766490309086,
+      "mean_latency_regret_ms": -6.396204937500001,
+      "top1_match_rate": 0.025,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.9487179487179487,
+      "strict_deadline_success_rate": 0.925
+    },
+    "n_decisions": 40
+  },
+  "tail": {
+    "metrics": {
+      "strict_success_rate": 0.925,
+      "deadline_miss_rate": 0.075,
+      "mean_energy_regret_j": 0.050891691728782974,
+      "mean_energy_regret_pct": 1.0615926511431077,
+      "mean_latency_regret_ms": -2.2354585250000008,
+      "top1_match_rate": 0.025,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.9487179487179487,
+      "strict_deadline_success_rate": 0.925
+    },
+    "n_decisions": 40
+  },
+  "risk_p0.5": {
+    "metrics": {
+      "strict_success_rate": 0.925,
+      "deadline_miss_rate": 0.075,
+      "mean_energy_regret_j": 0.05098998075540549,
+      "mean_energy_regret_pct": 1.0634427384873562,
+      "mean_latency_regret_ms": -2.4275532000000006,
+      "top1_match_rate": 0.025,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.9487179487179487,
+      "strict_deadline_success_rate": 0.925
+    },
+    "n_decisions": 40
+  },
+  "risk_p0.7": {
+    "metrics": {
+      "strict_success_rate": 0.95,
+      "deadline_miss_rate": 0.05,
+      "mean_energy_regret_j": 0.05863927027505661,
+      "mean_energy_regret_pct": 1.202597349601076,
+      "mean_latency_regret_ms": -2.8703734250000013,
+      "top1_match_rate": 0.0,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.9743589743589743,
+      "strict_deadline_success_rate": 0.95
+    },
+    "n_decisions": 40
+  },
+  "risk_p0.9": {
+    "metrics": {
+      "strict_success_rate": 0.95,
+      "deadline_miss_rate": 0.05,
+      "mean_energy_regret_j": 0.07324982427293761,
+      "mean_energy_regret_pct": 1.4807914351280813,
+      "mean_latency_regret_ms": -3.6777110625000007,
+      "top1_match_rate": 0.0,
+      "n_groups": 40,
+      "oracle_possible_groups": 39,
+      "selector_success_among_oracle_possible_groups": 0.9743589743589743,
+      "strict_deadline_success_rate": 0.95
+    },
+    "n_decisions": 40
+  }
+}

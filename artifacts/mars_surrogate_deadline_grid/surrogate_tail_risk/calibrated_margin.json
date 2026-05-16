@@ -1,0 +1,20 @@
+{
+  "median_to_max_gap": {
+    "mode": "median_to_max_gap",
+    "q": 0.95,
+    "margin_ms": 10.903017425000003,
+    "per_denoising_step_margin_ms": {
+      "1": 10.813579199999998,
+      "2": 12.2425926
+    }
+  },
+  "prediction_to_max_gap": {
+    "mode": "prediction_to_max_gap",
+    "q": 0.95,
+    "margin_ms": 12.081823401341694,
+    "per_denoising_step_margin_ms": {
+      "1": 11.606951243600982,
+      "2": 14.04063325302971
+    }
+  }
+}
