@@ -28,13 +28,16 @@ def split_train_test(
     split: str,
     test_size: float,
     random_state: int,
+    workload_group_cols: tuple[str, ...] = ("text_length_target", "denoising_steps", "num_views"),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if split == "random_rows":
         train, test = train_test_split(df, test_size=test_size, random_state=random_state)
         return train.copy(), test.copy()
 
     if split == "workload_holdout":
-        group_cols = ["text_length_target", "denoising_steps"]
+        group_cols = [column for column in workload_group_cols if column in df.columns]
+        if not group_cols:
+            raise ValueError("workload_holdout requires at least one workload group column")
     elif split == "opp_holdout":
         group_cols = OPP_COLUMNS
     else:
@@ -63,6 +66,13 @@ def apply_train_fraction(
     return train_df.sample(frac=train_fraction, random_state=random_state).copy()
 
 
+def parse_group_cols(value: str) -> tuple[str, ...]:
+    cols = tuple(item.strip() for item in value.split(",") if item.strip())
+    if not cols:
+        raise ValueError("group columns must contain at least one column")
+    return cols
+
+
 def flattened_metrics(metrics: dict[str, dict[str, float]]) -> dict[str, float]:
     return {
         "latency_mae_ms": metrics["latency"]["mae"],
@@ -87,6 +97,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         split=args.split,
         test_size=args.test_size,
         random_state=args.random_state,
+        workload_group_cols=parse_group_cols(args.workload_group_cols),
     )
     original_train = train_df
     train_df = apply_train_fraction(
@@ -211,6 +222,7 @@ def main() -> None:
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=0)
     parser.add_argument("--split", choices=["random_rows", "workload_holdout", "opp_holdout"], default="random_rows")
+    parser.add_argument("--workload-group-cols", default="text_length_target,denoising_steps,num_views")
     parser.add_argument("--train-fraction", type=float, default=None)
     args = parser.parse_args()
     print(json.dumps(_json_safe(train(args)), indent=2))

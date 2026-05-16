@@ -165,7 +165,7 @@ def main() -> None:
     parser.add_argument("--selector-mode", choices=["median_margin", "tail", "risk"], default="median_margin")
     parser.add_argument("--feasible-prob-threshold", type=float, default=0.5)
     parser.add_argument("--safety-margin-ms", type=float, default=0.0)
-    parser.add_argument("--group-cols", default="text_length_target,denoising_steps")
+    parser.add_argument("--group-cols", default="text_length_target,denoising_steps,num_views,fixed_period_ms")
     args = parser.parse_args()
     print(json.dumps(_json_safe(evaluate(args)), indent=2))
 
