@@ -19,6 +19,9 @@ VIEW_LABELS = {
     "image_only": "Front only (1 view)",
     "wrist_only": "Wrist only (1 view)",
     "both_views": "Front + wrist (2 views)",
+    "1_view": "1 view",
+    "2_views": "2 views",
+    "3_views": "3 views",
 }
 FREQ_ORDERS = {
     "cpu_label": ["2.430GHz", "2.601GHz"],
@@ -54,22 +57,30 @@ def metric_best_rows(df: pd.DataFrame, metric: str) -> pd.DataFrame:
         work["_score"] = work["vin_energy_j"]
     else:
         raise ValueError(metric)
-    idx = work.groupby(["text_label", "view_label"])["_score"].idxmin()
+    group_cols = ["text_label", "view_label"]
+    if "denoising_steps" in work.columns:
+        group_cols.append("denoising_steps")
+    idx = work.groupby(group_cols)["_score"].idxmin()
     best = work.loc[idx].copy()
-    best = best.sort_values(["text_label", "view_label"])
+    best = best.sort_values(group_cols)
     return best
 
 
 def add_default_gains(df: pd.DataFrame, best: pd.DataFrame, metric: str) -> pd.DataFrame:
-    defaults = df[df["config_name"] == "default"][
-        ["text_label", "view_label", "e2e_median_ms", "vin_energy_j"]
-    ].rename(
+    default_mask = df["config_name"].isin(["default", "all_default"])
+    if not default_mask.any():
+        raise ValueError("No default baseline row found. Expected config_name 'default' or 'all_default'.")
+    group_cols = ["text_label", "view_label"]
+    if "denoising_steps" in df.columns:
+        group_cols.append("denoising_steps")
+    defaults = df[default_mask][group_cols + ["e2e_median_ms", "vin_energy_j"]]
+    defaults = defaults.groupby(group_cols, as_index=False).mean(numeric_only=True).rename(
         columns={
             "e2e_median_ms": "default_e2e_median_ms",
             "vin_energy_j": "default_vin_energy_j",
         }
     )
-    merged = best.merge(defaults, on=["text_label", "view_label"], how="left")
+    merged = best.merge(defaults, on=group_cols, how="left")
     merged["latency_gain_pct"] = (
         (merged["default_e2e_median_ms"] - merged["e2e_median_ms"]) / merged["default_e2e_median_ms"] * 100.0
     )
@@ -89,6 +100,24 @@ def pivot_value(df: pd.DataFrame, value_col: str, text_order: list[str], view_or
     piv = df.pivot(index="view_label", columns="text_label", values=value_col)
     piv = piv.reindex(index=view_order, columns=text_order)
     return piv
+
+
+def ordered_views(merged_tables: dict[str, pd.DataFrame]) -> list[str]:
+    observed = {
+        str(v)
+        for df in merged_tables.values()
+        for v in df["view_label"].dropna().unique().tolist()
+    }
+    out = [v for v in VIEW_ORDER if v in observed]
+    out.extend(sorted(v for v in observed if v not in set(out)))
+    return out
+
+
+def freq_categories(df: pd.DataFrame, freq_col: str) -> list[str]:
+    observed = {str(v) for v in df[freq_col].dropna().unique().tolist()}
+    out = [v for v in FREQ_ORDERS.get(freq_col, []) if v in observed]
+    out.extend(sorted(v for v in observed if v not in set(out)))
+    return out
 
 
 def save_numeric_heatmap(
@@ -172,13 +201,15 @@ def save_metric_lineplot(
     ylabel: str,
     out_path: Path,
 ) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), sharex=True)
+    view_labels = ordered_views(merged_tables)
+    fig, axes = plt.subplots(1, len(view_labels), figsize=(5 * len(view_labels), 4.8), sharex=True)
+    axes = np.atleast_1d(axes)
     colors = {
         "best_latency": "#d62728",
         "best_energy": "#2ca02c",
         "best_tradeoff": "#1f77b4",
     }
-    for ax, view_label in zip(axes, VIEW_ORDER):
+    for ax, view_label in zip(axes, view_labels):
         for selection_metric, df in merged_tables.items():
             subset = df[df["view_label"] == view_label].copy()
             subset["text_num"] = subset["text_label"].str.extract(r"(\d+)").astype(int)
@@ -207,15 +238,25 @@ def save_freq_selection_lines(
     freq_col: str,
     out_path: Path,
 ) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), sharex=True)
-    order = FREQ_ORDERS[freq_col]
+    view_labels = ordered_views(merged_tables)
+    fig, axes = plt.subplots(1, len(view_labels), figsize=(5 * len(view_labels), 4.8), sharex=True)
+    axes = np.atleast_1d(axes)
+    observed = sorted(
+        {
+            str(v)
+            for df in merged_tables.values()
+            for v in df[freq_col].dropna().unique().tolist()
+        }
+    )
+    order = [v for v in FREQ_ORDERS.get(freq_col, []) if v in observed]
+    order.extend([v for v in observed if v not in order])
     mapping = {v: i for i, v in enumerate(order)}
     colors = {
         "best_latency": "#d62728",
         "best_energy": "#2ca02c",
         "best_tradeoff": "#1f77b4",
     }
-    for ax, view_label in zip(axes, VIEW_ORDER):
+    for ax, view_label in zip(axes, view_labels):
         for selection_metric, df in merged_tables.items():
             subset = df[df["view_label"] == view_label].copy()
             subset["text_num"] = subset["text_label"].str.extract(r"(\d+)").astype(int)
@@ -271,6 +312,8 @@ def write_markdown_table(df: pd.DataFrame, out_path: Path) -> None:
         "energy_gain_pct",
         "tradeoff_gain_pct",
     ]
+    if "denoising_steps" in df.columns:
+        cols.insert(2, "denoising_steps")
     view = df[cols].copy()
     rounded = view.copy()
     for col in ["e2e_median_ms", "vin_energy_j", "latency_gain_pct", "energy_gain_pct", "tradeoff_gain_pct"]:
@@ -291,8 +334,16 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(args.summary_csv)
+    if "e2e_median_ms" not in df.columns and "e2e_median_ms_mean" in df.columns:
+        df["e2e_median_ms"] = df["e2e_median_ms_mean"]
+    if "vin_energy_j" not in df.columns and "vin_energy_j_mean" in df.columns:
+        df["vin_energy_j"] = df["vin_energy_j_mean"]
+    if "denoising_steps" in df.columns and df["denoising_steps"].nunique(dropna=True) > 1:
+        df["text_label"] = df["text_label"].astype(str) + "_d" + df["denoising_steps"].astype(int).astype(str)
     text_order = sort_text_labels(df["text_label"].dropna().unique().tolist())
-    view_order = [v for v in VIEW_ORDER if v in set(df["view_label"].dropna().tolist())]
+    observed_views = df["view_label"].dropna().tolist()
+    view_order = [v for v in VIEW_ORDER if v in set(observed_views)]
+    view_order.extend([v for v in sorted(set(observed_views)) if v not in view_order])
 
     merged_tables: dict[str, pd.DataFrame] = {}
     combined_rows = []
@@ -335,21 +386,21 @@ def main() -> None:
             title=f"{metric}: best CPU freq",
             value_label="CPU freq",
             out_path=out_dir / f"{metric}_cpu_freq_heatmap.png",
-            categories=["default", "2.430GHz", "2.601GHz"],
+            categories=freq_categories(merged, "cpu_label"),
         )
         save_categorical_heatmap(
             pivot_value(merged, "gpu_label", text_order, view_order),
             title=f"{metric}: best GPU freq",
             value_label="GPU freq",
             out_path=out_dir / f"{metric}_gpu_freq_heatmap.png",
-            categories=["default", "1.107GHz", "1.305GHz", "1.503GHz"],
+            categories=freq_categories(merged, "gpu_label"),
         )
         save_categorical_heatmap(
             pivot_value(merged, "emc_label", text_order, view_order),
             title=f"{metric}: best EMC freq",
             value_label="EMC freq",
             out_path=out_dir / f"{metric}_emc_freq_heatmap.png",
-            categories=["default", "2.750GHz", "3.200GHz", "4.266GHz"],
+            categories=freq_categories(merged, "emc_label"),
         )
 
     combined = pd.concat(combined_rows, ignore_index=True)

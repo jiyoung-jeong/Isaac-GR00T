@@ -62,6 +62,23 @@ from deployment_scripts import thor_emcfreq_power_sweep as emc_mod
 from deployment_scripts import thor_gpufreq_power_sweep as gpu_mod
 
 
+def log_phase_event(name: str, event: str, **fields: object) -> None:
+    path = os.environ.get("THOR_PHASE_EVENTS_CSV")
+    if not path:
+        return
+    line_fields = {
+        "ts_ns": time.monotonic_ns(),
+        "name": name,
+        "event": event,
+        **fields,
+    }
+    exists = os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if not exists:
+            f.write(",".join(line_fields.keys()) + "\n")
+        f.write(",".join(str(v) for v in line_fields.values()) + "\n")
+
+
 @dataclass(frozen=True)
 class FreqConfig:
     name: str
@@ -206,6 +223,14 @@ def choose_configs(args: argparse.Namespace) -> list[FreqConfig]:
 def choose_view_configs(args: argparse.Namespace, available_keys: list[str]) -> list[ViewConfig]:
     preset_view_configs: dict[str, list[ViewConfig]] = {
         "all_views": [ViewConfig("all_views", tuple(available_keys))],
+        "incremental_views": [
+            ViewConfig(f"{i}_view" if i == 1 else f"{i}_views", tuple(available_keys[:i]))
+            for i in range(1, len(available_keys) + 1)
+        ],
+        "up_to_three_views": [
+            ViewConfig(f"{i}_view" if i == 1 else f"{i}_views", tuple(available_keys[:i]))
+            for i in range(1, min(3, len(available_keys)) + 1)
+        ],
         "first_last_views": [
             ViewConfig("first_only", (available_keys[0],)),
             ViewConfig("last_only", (available_keys[-1],)),
@@ -249,6 +274,7 @@ def choose_view_configs(args: argparse.Namespace, available_keys: list[str]) -> 
 
 def set_policy_view_keys(policy: Gr00tPolicy, view_keys: tuple[str, ...]) -> None:
     policy.modality_configs["video"].modality_keys = list(view_keys)
+    policy.processor.modality_configs[policy.embodiment_tag.value]["video"].modality_keys = list(view_keys)
 
 
 def set_policy_denoising_steps(policy: Gr00tPolicy, denoising_steps: int) -> None:
@@ -285,6 +311,79 @@ def config_matches(config: FreqConfig) -> bool:
     return cpu_ok and gpu_ok and emc_ok
 
 
+def _finite_mean(values: list[int]) -> int:
+    valid = [int(v) for v in values if int(v) > 0]
+    if not valid:
+        return -1
+    return int(round(sum(valid) / len(valid)))
+
+
+def read_actual_freq_status(config: FreqConfig) -> dict[str, int]:
+    status: dict[str, int] = {}
+    try:
+        cpu_status = cpu_mod.read_cpu_policy_status()
+        cpu_cur = [row.get("cur_khz", -1) * 1000 for row in cpu_status.values()]
+        cpu_min = [row.get("min_khz", -1) * 1000 for row in cpu_status.values()]
+        cpu_max = [row.get("max_khz", -1) * 1000 for row in cpu_status.values()]
+        status.update(
+            {
+                "actual_cpu_hz": _finite_mean(cpu_cur),
+                "actual_cpu_hz_min": min(cpu_cur) if cpu_cur else -1,
+                "actual_cpu_hz_max": max(cpu_cur) if cpu_cur else -1,
+                "actual_cpu_min_hz": _finite_mean(cpu_min),
+                "actual_cpu_max_hz": _finite_mean(cpu_max),
+                "cpu_lock_ok": int(config.cpu_hz is None or cpu_mod.cpu_lock_matches(config.cpu_hz)[0]),
+            }
+        )
+    except Exception as exc:
+        print(f"[WARN] Failed to read CPU frequency status: {exc}", file=sys.stderr)
+        status.update(
+            {
+                "actual_cpu_hz": -1,
+                "actual_cpu_hz_min": -1,
+                "actual_cpu_hz_max": -1,
+                "actual_cpu_min_hz": -1,
+                "actual_cpu_max_hz": -1,
+                "cpu_lock_ok": 0,
+            }
+        )
+
+    try:
+        gpu_rates = gpu_mod.read_gpu_debug_rates()
+        gpu_values = list(gpu_rates.values())
+        status.update(
+            {
+                "actual_gpu_hz": _finite_mean(gpu_values),
+                "actual_gpu_hz_min": min(gpu_values) if gpu_values else -1,
+                "actual_gpu_hz_max": max(gpu_values) if gpu_values else -1,
+                "gpu_lock_ok": int(config.gpu_hz is None or gpu_mod.gpu_lock_matches(config.gpu_hz)[0]),
+            }
+        )
+    except Exception as exc:
+        print(f"[WARN] Failed to read GPU frequency status: {exc}", file=sys.stderr)
+        status.update(
+            {
+                "actual_gpu_hz": -1,
+                "actual_gpu_hz_min": -1,
+                "actual_gpu_hz_max": -1,
+                "gpu_lock_ok": 0,
+            }
+        )
+
+    try:
+        emc_status = emc_mod.read_emc_status()
+        status.update(
+            {
+                "actual_emc_hz": int(emc_status.get("rate_hz", -1)),
+                "emc_lock_ok": int(config.emc_hz is None or emc_mod.emc_lock_matches(config.emc_hz)[0]),
+            }
+        )
+    except Exception as exc:
+        print(f"[WARN] Failed to read EMC frequency status: {exc}", file=sys.stderr)
+        status.update({"actual_emc_hz": -1, "emc_lock_ok": 0})
+    return status
+
+
 def settle_freq_config(config: FreqConfig, settle_s: float, timeout_s: float = 5.0) -> None:
     apply_freq_config(config)
     time.sleep(settle_s)
@@ -303,7 +402,7 @@ def build_power_sampler():
     ina3221 = cpu_mod.find_hwmon(cpu_mod.INA3221_ROOT, required_label="GPU")
     gpu_ch = cpu_mod.find_ina3221_channel(ina3221, "GPU") if ina3221 else None
     cpu_ch = cpu_mod.find_ina3221_channel(ina3221, "CPU_SOC_MSS") if ina3221 else None
-    vin_ch = cpu_mod.find_ina3221_channel(ina3221, "VIN_SYS_5V0") if ina3221 else None
+    vin_ch = None
     return ina3221, gpu_ch, cpu_ch, vin_ch
 
 
@@ -312,7 +411,7 @@ def sample_power_row(ina3221, gpu_ch, cpu_ch, vin_ch) -> dict[str, float]:
         "ts_ns": time.monotonic_ns(),
         "gpu_power_w": cpu_mod.read_power_from_channel(ina3221, gpu_ch),
         "cpu_soc_mss_power_w": cpu_mod.read_power_from_channel(ina3221, cpu_ch),
-        "vin_power_w": cpu_mod.read_power_from_channel(ina3221, vin_ch),
+        "vin_power_w": cpu_mod.read_vin_power_w(),
     }
 
 
@@ -364,47 +463,89 @@ def prepare_model_inputs(policy, observation):
     return _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
 
 
+def inspect_model_inputs(policy, observation) -> dict[str, object]:
+    collated = prepare_model_inputs(policy, observation)
+    stats: dict[str, object] = {}
+    for key in ("input_ids", "attention_mask", "pixel_values", "image_grid_thw", "image_sizes"):
+        value = collated.get(key)
+        if not isinstance(value, torch.Tensor):
+            continue
+        stats[f"{key}_shape"] = "x".join(str(v) for v in value.shape)
+    input_ids = collated.get("input_ids")
+    if isinstance(input_ids, torch.Tensor) and input_ids.ndim >= 2:
+        stats["input_token_count"] = int(input_ids.shape[-1])
+    attention_mask = collated.get("attention_mask")
+    if isinstance(attention_mask, torch.Tensor):
+        stats["attention_token_count"] = int(attention_mask.sum().item())
+    image_grid = collated.get("image_grid_thw")
+    if isinstance(image_grid, torch.Tensor) and image_grid.numel() > 0:
+        grid = image_grid.detach().cpu().to(torch.int64)
+        stats["image_grid_count"] = int(grid.shape[0])
+        stats["image_grid_tokens"] = int(torch.prod(grid, dim=1).sum().item())
+    image_sizes = collated.get("image_sizes")
+    if isinstance(image_sizes, torch.Tensor):
+        stats["image_input_count"] = int(image_sizes.shape[0])
+    pixel_values = collated.get("pixel_values")
+    if isinstance(pixel_values, list):
+        stats["pixel_values_items"] = len(pixel_values)
+        stats.setdefault("image_input_count", len(pixel_values))
+    elif isinstance(pixel_values, torch.Tensor):
+        stats["pixel_values_items"] = int(pixel_values.shape[0])
+        stats.setdefault("image_input_count", int(pixel_values.shape[0]))
+    return stats
+
+
 def benchmark_data_processing(policy, observation, num_iterations=20, warmup=10):
+    log_phase_event("data_processing_warmup", "start", iterations=warmup)
     for _ in range(warmup):
         _ = prepare_model_inputs(policy, observation)
+    log_phase_event("data_processing_warmup", "end", iterations=warmup)
     times = []
-    for _ in range(num_iterations):
+    for i in range(num_iterations):
+        log_phase_event("data_processing_iter", "start", iteration=i)
         start = time.perf_counter()
         _ = prepare_model_inputs(policy, observation)
         end = time.perf_counter()
+        log_phase_event("data_processing_iter", "end", iteration=i)
         times.append(end - start)
     return np.array(times) * 1000.0
 
 
 def benchmark_components(policy, observation, num_iterations=20, warmup=3):
-    for _ in range(warmup):
+    log_phase_event("gpu_warmup", "start", iterations=warmup)
+    for i in range(warmup):
         collated_inputs = prepare_model_inputs(policy, observation)
         with torch.inference_mode():
             backbone_inputs, action_inputs = policy.model.prepare_input(collated_inputs)
             backbone_outputs = policy.model.backbone(backbone_inputs)
             _ = policy.model.action_head.get_action(backbone_outputs, action_inputs)
     torch.cuda.synchronize()
+    log_phase_event("gpu_warmup", "end", iterations=warmup)
 
     backbone_times = []
     action_head_times = []
-    for _ in range(num_iterations):
+    for i in range(num_iterations):
         collated_inputs = prepare_model_inputs(policy, observation)
 
         torch.cuda.synchronize()
+        log_phase_event("backbone_iter", "start", iteration=i)
         start = time.perf_counter()
         with torch.inference_mode():
             backbone_inputs, action_inputs = policy.model.prepare_input(collated_inputs)
             backbone_outputs = policy.model.backbone(backbone_inputs)
         torch.cuda.synchronize()
         end = time.perf_counter()
+        log_phase_event("backbone_iter", "end", iteration=i)
         backbone_times.append(end - start)
 
         torch.cuda.synchronize()
+        log_phase_event("action_head_iter", "start", iteration=i)
         start = time.perf_counter()
         with torch.inference_mode():
             _ = policy.model.action_head.get_action(backbone_outputs, action_inputs)
         torch.cuda.synchronize()
         end = time.perf_counter()
+        log_phase_event("action_head_iter", "end", iteration=i)
         action_head_times.append(end - start)
 
     data_processing_times = benchmark_data_processing(policy, observation, num_iterations, warmup=10)
@@ -413,10 +554,6 @@ def benchmark_components(policy, observation, num_iterations=20, warmup=3):
         "backbone": np.array(backbone_times) * 1000.0,
         "action_head": np.array(action_head_times) * 1000.0,
     }
-
-
-def compute_e2e_from_components(components):
-    return components["data_processing"] + components["backbone"] + components["action_head"]
 
 
 def replace_dit_with_tensorrt(policy: Gr00tPolicy | Any, trt_engine_path: str, device: int = 0):
@@ -518,6 +655,14 @@ def mutate_observation(
 
 
 def summarize_metric(values: np.ndarray) -> dict[str, float]:
+    if values.size == 0 or not np.isfinite(values).any():
+        return {
+            "median_ms": float("nan"),
+            "mean_ms": float("nan"),
+            "std_ms": float("nan"),
+            "min_ms": float("nan"),
+            "max_ms": float("nan"),
+        }
     return {
         "median_ms": float(np.median(values)),
         "mean_ms": float(np.mean(values)),
@@ -662,8 +807,194 @@ def run_benchmark_with_telemetry(
         "cpu_soc_mss_energy_j": integrate_energy(samples, "cpu_soc_mss_power_w"),
         "vin_energy_j": integrate_energy(samples, "vin_power_w"),
         "telemetry_samples": len(samples),
+        "telemetry_timed_iterations": num_iterations,
+        "telemetry_includes_warmup": 1,
     }
+    for key in ("gpu_energy_j", "cpu_soc_mss_energy_j", "vin_energy_j"):
+        telemetry[f"{key}_per_timed_iteration"] = telemetry[key] / num_iterations
     return components, telemetry
+
+
+def _cuda_synchronize() -> None:
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+def parse_period_by_denoising(spec: str | None) -> dict[int, float]:
+    if not spec:
+        return {}
+    out: dict[int, float] = {}
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                f"Invalid --period_by_denoising item '{item}'. Use comma-separated step:ms pairs, e.g. 1:70,2:85"
+            )
+        step_s, period_s = item.split(":", 1)
+        out[int(step_s.strip())] = float(period_s.strip())
+    return out
+
+
+def resolve_fixed_period_ms(args: argparse.Namespace, denoising_steps: int) -> float:
+    mapping = parse_period_by_denoising(args.period_by_denoising)
+    if denoising_steps in mapping:
+        return mapping[denoising_steps]
+    if args.fixed_period_ms is not None:
+        return float(args.fixed_period_ms)
+    raise ValueError(
+        f"Fixed-period mode needs --fixed_period_ms or a --period_by_denoising entry for denoising={denoising_steps}"
+    )
+
+
+def run_fixed_period_benchmark_with_telemetry(
+    policy,
+    observation,
+    *,
+    num_iterations: int,
+    warmup: int,
+    power_interval_ms: float,
+    period_ms: float,
+    body: str,
+):
+    log_phase_event("fixed_period_warmup", "start", iterations=warmup, period_ms=period_ms)
+    for _ in range(warmup):
+        if body == "policy":
+            _ = policy.get_action(observation)
+        elif body == "components":
+            collated_inputs = prepare_model_inputs(policy, observation)
+            with torch.inference_mode():
+                backbone_inputs, action_inputs = policy.model.prepare_input(collated_inputs)
+                backbone_outputs = policy.model.backbone(backbone_inputs)
+                _ = policy.model.action_head.get_action(backbone_outputs, action_inputs)
+        else:
+            raise ValueError(f"Unsupported fixed-period body: {body}")
+        _cuda_synchronize()
+    log_phase_event("fixed_period_warmup", "end", iterations=warmup, period_ms=period_ms)
+
+    ina3221, gpu_ch, cpu_ch, vin_ch = build_power_sampler()
+    samples = []
+    stop_flag = [False]
+    worker = threading.Thread(
+        target=telemetry_loop,
+        args=(stop_flag, samples, power_interval_ms / 1000.0, ina3221, gpu_ch, cpu_ch, vin_ch),
+        daemon=True,
+    )
+    worker.start()
+
+    latencies_ms: list[float] = []
+    data_processing_ms: list[float] = []
+    backbone_ms: list[float] = []
+    action_head_ms: list[float] = []
+    period_elapsed_ms: list[float] = []
+    sleep_requested_ms: list[float] = []
+    sleep_actual_ms: list[float] = []
+    deadline_misses = 0
+    period_s = period_ms / 1000.0
+    start_ns = time.monotonic_ns()
+    try:
+        for i in range(num_iterations):
+            iter_start_ns = time.monotonic_ns()
+            log_phase_event("fixed_period_iter", "start", iteration=i, period_ms=period_ms)
+            if body == "policy":
+                _ = policy.get_action(observation)
+                _cuda_synchronize()
+                inference_end_ns = time.monotonic_ns()
+                data_processing_ms.append(float("nan"))
+                backbone_ms.append(float("nan"))
+                action_head_ms.append(float("nan"))
+            elif body == "components":
+                data_start_ns = time.monotonic_ns()
+                collated_inputs = prepare_model_inputs(policy, observation)
+                data_end_ns = time.monotonic_ns()
+                _cuda_synchronize()
+                backbone_start_ns = time.monotonic_ns()
+                with torch.inference_mode():
+                    backbone_inputs, action_inputs = policy.model.prepare_input(collated_inputs)
+                    backbone_outputs = policy.model.backbone(backbone_inputs)
+                _cuda_synchronize()
+                backbone_end_ns = time.monotonic_ns()
+                action_start_ns = time.monotonic_ns()
+                with torch.inference_mode():
+                    _ = policy.model.action_head.get_action(backbone_outputs, action_inputs)
+                _cuda_synchronize()
+                inference_end_ns = time.monotonic_ns()
+                data_processing_ms.append((data_end_ns - data_start_ns) / 1e6)
+                backbone_ms.append((backbone_end_ns - backbone_start_ns) / 1e6)
+                action_head_ms.append((inference_end_ns - action_start_ns) / 1e6)
+            else:
+                raise ValueError(f"Unsupported fixed-period body: {body}")
+            latency_ms = (inference_end_ns - iter_start_ns) / 1e6
+            remaining_s = period_s - ((inference_end_ns - iter_start_ns) / 1e9)
+            requested_sleep_ms = max(0.0, remaining_s * 1000.0)
+            sleep_start_ns = time.monotonic_ns()
+            if remaining_s > 0:
+                time.sleep(remaining_s)
+            else:
+                deadline_misses += 1
+            iter_end_ns = time.monotonic_ns()
+            actual_sleep_ms = (iter_end_ns - sleep_start_ns) / 1e6 if requested_sleep_ms > 0 else 0.0
+            elapsed_ms = (iter_end_ns - iter_start_ns) / 1e6
+            latencies_ms.append(latency_ms)
+            period_elapsed_ms.append(elapsed_ms)
+            sleep_requested_ms.append(requested_sleep_ms)
+            sleep_actual_ms.append(actual_sleep_ms)
+            log_phase_event(
+                "fixed_period_iter",
+                "end",
+                iteration=i,
+                period_ms=period_ms,
+                latency_ms=latency_ms,
+                period_elapsed_ms=elapsed_ms,
+                deadline_miss=int(remaining_s <= 0),
+            )
+    finally:
+        stop_flag[0] = True
+        worker.join(timeout=2.0)
+    end_ns = time.monotonic_ns()
+    if not samples or samples[-1]["ts_ns"] < end_ns:
+        samples.append(sample_power_row(ina3221, gpu_ch, cpu_ch, vin_ch))
+        samples[-1]["ts_ns"] = end_ns
+
+    telemetry = {
+        "duration_s": (end_ns - start_ns) / 1e9,
+        "fixed_period_enabled": 1,
+        "fixed_period_body": body,
+        "fixed_period_ms": period_ms,
+        "fixed_period_target_total_s": num_iterations * period_s,
+        "fixed_period_deadline_misses": deadline_misses,
+        "fixed_period_deadline_miss_pct": deadline_misses / max(1, num_iterations) * 100.0,
+        "fixed_period_elapsed_median_ms": float(np.median(period_elapsed_ms)),
+        "fixed_period_elapsed_mean_ms": float(np.mean(period_elapsed_ms)),
+        "fixed_period_sleep_requested_mean_ms": float(np.mean(sleep_requested_ms)),
+        "fixed_period_sleep_actual_mean_ms": float(np.mean(sleep_actual_ms)),
+        "gpu_power_mean_w": float(np.nanmean([s["gpu_power_w"] for s in samples])),
+        "cpu_soc_mss_power_mean_w": float(np.nanmean([s["cpu_soc_mss_power_w"] for s in samples])),
+        "vin_power_mean_w": float(np.nanmean([s["vin_power_w"] for s in samples])),
+        "gpu_energy_j": integrate_energy(samples, "gpu_power_w"),
+        "cpu_soc_mss_energy_j": integrate_energy(samples, "cpu_soc_mss_power_w"),
+        "vin_energy_j": integrate_energy(samples, "vin_power_w"),
+        "telemetry_samples": len(samples),
+        "telemetry_timed_iterations": num_iterations,
+        "telemetry_includes_warmup": 0,
+    }
+    for key in ("gpu_energy_j", "cpu_soc_mss_energy_j", "vin_energy_j"):
+        telemetry[f"{key}_per_timed_iteration"] = telemetry[key] / num_iterations
+
+    latencies = np.array(latencies_ms, dtype=float)
+    return {
+        "data_processing": np.array(data_processing_ms, dtype=float),
+        "backbone": np.array(backbone_ms, dtype=float),
+        "action_head": np.array(action_head_ms, dtype=float),
+        "e2e": latencies,
+    }, telemetry
+
+
+def compute_e2e_from_components(components):
+    if "e2e" in components:
+        return components["e2e"]
+    return components["data_processing"] + components["backbone"] + components["action_head"]
 
 
 def main():
@@ -716,6 +1047,37 @@ def main():
     )
     parser.add_argument("--power_interval_ms", type=float, default=2.0)
     parser.add_argument("--freq_settle_s", type=float, default=1.0)
+    parser.add_argument(
+        "--fixed_period",
+        action="store_true",
+        help="Measure energy over a fixed control period: get_action, CUDA sync, then sleep until the period ends.",
+    )
+    parser.add_argument(
+        "--fixed_period_ms",
+        type=float,
+        default=None,
+        help="Fixed control period in ms. Used when --period_by_denoising does not specify the current step count.",
+    )
+    parser.add_argument(
+        "--fixed_period_body",
+        choices=["components", "policy"],
+        default="components",
+        help=(
+            "Timed body for fixed-period mode. 'components' matches the paper figures "
+            "(prepare_model_inputs + backbone + action_head); 'policy' measures full policy.get_action()."
+        ),
+    )
+    parser.add_argument(
+        "--period_by_denoising",
+        type=str,
+        default=None,
+        help="Comma-separated denoising-step latency budgets in ms, e.g. '1:70,2:85,4:110,8:155'.",
+    )
+    parser.add_argument(
+        "--shuffle_conditions",
+        action="store_true",
+        help="Shuffle benchmark condition order after expanding the sweep. This interleaves frequency/input settings.",
+    )
     parser.add_argument("--out_dir", type=str, default="thor_measurements/input_sweep")
     args = parser.parse_args()
 
@@ -782,75 +1144,115 @@ def main():
         replace_dit_with_tensorrt(policy_trt, args.trt_engine_path)
         policies["tensorrt"] = policy_trt
 
+    conditions: list[tuple[FreqConfig, ViewConfig, int, int | None, str, tuple[int, int], int, str]] = []
+    for cfg in freq_configs:
+        for view_cfg in view_configs:
+            for denoise_steps in denoising_steps:
+                for text_len, text_label in zip(text_lengths, text_labels):
+                    for image_size in image_sizes:
+                        for repeat_id in range(args.repeat_runs):
+                            for mode in args.inference_modes:
+                                conditions.append(
+                                    (
+                                        cfg,
+                                        view_cfg,
+                                        denoise_steps,
+                                        text_len,
+                                        text_label,
+                                        image_size,
+                                        repeat_id,
+                                        mode,
+                                    )
+                                )
+    if args.shuffle_conditions:
+        random.Random(args.seed).shuffle(conditions)
+
     rows: list[dict[str, Any]] = []
+    current_cfg_key: tuple[str, int | None, int | None, int | None] | None = None
     try:
-        for cfg in freq_configs:
-            settle_freq_config(cfg, settle_s=args.freq_settle_s)
-            for view_cfg in view_configs:
-                for mode in args.inference_modes:
-                    set_policy_view_keys(policies[mode], view_cfg.keys)
-                for denoise_steps in denoising_steps:
-                    for mode in args.inference_modes:
-                        set_policy_denoising_steps(policies[mode], denoise_steps)
-                    for text_len, text_label in zip(text_lengths, text_labels):
-                        for image_size in image_sizes:
-                            image_label = format_image_size(image_size)
-                            observation = mutate_observation(
-                                base_observation,
-                                image_size=image_size,
-                                view_keys=view_cfg.keys,
-                                text_length=text_len,
-                                text_unit=args.text_unit,
-                                filler_token=args.filler_token,
-                            )
-                            actual_text = observation["language"][list(observation["language"].keys())[0]][0][0]
-                            for repeat_id in range(args.repeat_runs):
-                                for mode in args.inference_modes:
-                                    policy = policies[mode]
-                                    warmup = args.warmup + (5 if mode == "tensorrt" else 0)
-                                    components, telemetry = run_benchmark_with_telemetry(
-                                        policy,
-                                        observation,
-                                        num_iterations=args.num_iterations,
-                                        warmup=warmup,
-                                        power_interval_ms=args.power_interval_ms,
-                                    )
-                                    e2e = compute_e2e_from_components(components)
-                                    row = {
-                                        "repeat_id": repeat_id,
-                                        "config_name": cfg.name,
-                                        "cpu_label": cfg.cpu_label,
-                                        "gpu_label": cfg.gpu_label,
-                                        "emc_label": cfg.emc_label,
-                                        "mode": mode,
-                                        "view_label": view_cfg.label,
-                                        "view_keys": ",".join(view_cfg.keys),
-                                        "num_views": len(view_cfg.keys),
-                                        "denoising_steps": denoise_steps,
-                                        "text_length_target": text_len if text_len is not None else -1,
-                                        "text_label": text_label,
-                                        "image_h": image_size[0],
-                                        "image_w": image_size[1],
-                                        "image_label": image_label,
-                                        "actual_text_chars": len(actual_text),
-                                        "actual_text_words": len(actual_text.split()),
-                                        **telemetry,
-                                    }
-                                    for metric_name, values in [
-                                        ("data_processing", components["data_processing"]),
-                                        ("backbone", components["backbone"]),
-                                        ("action_head", components["action_head"]),
-                                        ("e2e", e2e),
-                                    ]:
-                                        stats = summarize_metric(values)
-                                        for key, value in stats.items():
-                                            row[f"{metric_name}_{key}"] = value
-                                    rows.append(row)
-                                    print(
-                                        f"[DONE] rep={repeat_id} cfg={cfg.name} mode={mode} view={view_cfg.label} "
-                                        f"denoise={denoise_steps} text={text_label} image={image_label} "
-                                        f"e2e_median={row['e2e_median_ms']:.2f} ms vin_energy={row['vin_energy_j']:.2f} J"
-                                    )
+        for cfg, view_cfg, denoise_steps, text_len, text_label, image_size, repeat_id, mode in conditions:
+            cfg_key = (cfg.name, cfg.cpu_hz, cfg.gpu_hz, cfg.emc_hz)
+            if cfg_key != current_cfg_key:
+                settle_freq_config(cfg, settle_s=args.freq_settle_s)
+                current_cfg_key = cfg_key
+            freq_status = read_actual_freq_status(cfg)
+            set_policy_view_keys(policies[mode], view_cfg.keys)
+            set_policy_denoising_steps(policies[mode], denoise_steps)
+            image_label = format_image_size(image_size)
+            observation = mutate_observation(
+                base_observation,
+                image_size=image_size,
+                view_keys=view_cfg.keys,
+                text_length=text_len,
+                text_unit=args.text_unit,
+                filler_token=args.filler_token,
+            )
+            actual_text = observation["language"][list(observation["language"].keys())[0]][0][0]
+            policy = policies[mode]
+            input_stats = inspect_model_inputs(policy, observation)
+            warmup = args.warmup + (5 if mode == "tensorrt" else 0)
+            if args.fixed_period:
+                period_ms = resolve_fixed_period_ms(args, denoise_steps)
+                components, telemetry = run_fixed_period_benchmark_with_telemetry(
+                    policy,
+                    observation,
+                    num_iterations=args.num_iterations,
+                    warmup=warmup,
+                    power_interval_ms=args.power_interval_ms,
+                    period_ms=period_ms,
+                    body=args.fixed_period_body,
+                )
+            else:
+                components, telemetry = run_benchmark_with_telemetry(
+                    policy,
+                    observation,
+                    num_iterations=args.num_iterations,
+                    warmup=warmup,
+                    power_interval_ms=args.power_interval_ms,
+                )
+            post_freq_status = {
+                f"post_{key}": value for key, value in read_actual_freq_status(cfg).items()
+            }
+            e2e = compute_e2e_from_components(components)
+            row = {
+                "repeat_id": repeat_id,
+                "config_name": cfg.name,
+                "cpu_label": cfg.cpu_label,
+                "gpu_label": cfg.gpu_label,
+                "emc_label": cfg.emc_label,
+                **freq_status,
+                **post_freq_status,
+                "mode": mode,
+                "view_label": view_cfg.label,
+                "view_keys": ",".join(view_cfg.keys),
+                "num_views": len(view_cfg.keys),
+                "denoising_steps": denoise_steps,
+                "text_length_target": text_len if text_len is not None else -1,
+                "text_label": text_label,
+                "image_h": image_size[0],
+                "image_w": image_size[1],
+                "image_label": image_label,
+                "actual_text_chars": len(actual_text),
+                "actual_text_words": len(actual_text.split()),
+                **input_stats,
+                **telemetry,
+            }
+            for metric_name, values in [
+                ("data_processing", components["data_processing"]),
+                ("backbone", components["backbone"]),
+                ("action_head", components["action_head"]),
+                ("e2e", e2e),
+            ]:
+                stats = summarize_metric(values)
+                for key, value in stats.items():
+                    row[f"{metric_name}_{key}"] = value
+            rows.append(row)
+            print(
+                f"[DONE] rep={repeat_id} cfg={cfg.name} mode={mode} view={view_cfg.label} "
+                f"denoise={denoise_steps} text={text_label} image={image_label} "
+                f"tokens={row.get('input_token_count', 'na')} image_tokens={row.get('image_grid_tokens', 'na')} "
+                f"e2e_median={row['e2e_median_ms']:.2f} ms vin_energy={row['vin_energy_j']:.2f} J"
+            )
     finally:
         unlock_all_freqs()
 
@@ -877,10 +1279,16 @@ def main():
         f.write(f"- embodiment: `{args.embodiment_tag}`\n")
         f.write(f"- base text chars: `{len(base_text)}`\n")
         f.write(f"- base text words: `{len(base_text.split())}`\n")
+        f.write(f"- available view keys: `{', '.join(available_view_keys)}`\n")
         f.write(f"- modes: `{', '.join(args.inference_modes)}`\n")
         f.write(f"- configs: `{', '.join(cfg.name for cfg in freq_configs)}`\n")
         f.write(f"- view configs: `{', '.join(cfg.label for cfg in view_configs)}`\n")
         f.write(f"- denoising steps: `{', '.join(str(v) for v in denoising_steps)}`\n")
+        f.write(f"- fixed period: `{args.fixed_period}`\n")
+        f.write(f"- fixed period body: `{args.fixed_period_body}`\n")
+        f.write(f"- fixed period ms: `{args.fixed_period_ms}`\n")
+        f.write(f"- period by denoising: `{args.period_by_denoising}`\n")
+        f.write(f"- shuffle conditions: `{args.shuffle_conditions}`\n")
         f.write(f"- output: `{out_dir}`\n")
 
 

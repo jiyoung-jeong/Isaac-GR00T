@@ -29,6 +29,10 @@ INCLUDE_ALL_DEFAULT="${INCLUDE_ALL_DEFAULT:-1}"
 CPU_FREQS="${CPU_FREQS:-1.836GHz 2.052GHz 2.160GHz 2.376GHz 2.484GHz 2.601GHz}"
 GPU_FREQS="${GPU_FREQS:-900MHz 1.107GHz 1.206GHz 1.305GHz 1.503GHz 1.575GHz}"
 EMC_FREQS="${EMC_FREQS:-665.6MHz 2.75GHz 3.2GHz 4.266GHz}"
+SHUFFLE_CONDITIONS="${SHUFFLE_CONDITIONS:-0}"
+VIEW_CONFIGS_TEXT_ONLY="${VIEW_CONFIGS_TEXT_ONLY:-both_views|image,wrist_image}"
+VIEW_CONFIG_PRESETS_VIEW_ONLY="${VIEW_CONFIG_PRESETS_VIEW_ONLY:-up_to_three_views}"
+VIEW_CONFIGS_VIEW_ONLY="${VIEW_CONFIGS_VIEW_ONLY:-}"
 
 TEXT_OUT="${OUT_ROOT}/text_only_both_views"
 VIEW_OUT="${OUT_ROOT}/viewcount_only"
@@ -53,6 +57,10 @@ echo "[INFO] Text-only lengths: $TEXT_LENGTHS_TEXT_ONLY"
 echo "[INFO] View-count text length: $TEXT_LENGTH_VIEW_ONLY"
 echo "[INFO] Denoising steps: $DENOISING_STEPS"
 echo "[INFO] Repeat runs: $REPEAT_RUNS"
+echo "[INFO] Shuffle conditions: $SHUFFLE_CONDITIONS"
+echo "[INFO] Text-only view configs: $VIEW_CONFIGS_TEXT_ONLY"
+echo "[INFO] View-count presets: $VIEW_CONFIG_PRESETS_VIEW_ONLY"
+echo "[INFO] View-count explicit configs: ${VIEW_CONFIGS_VIEW_ONLY:-<none>}"
 
 COMMON_ARGS=(
   --model_path "$MODEL_PATH"
@@ -65,6 +73,9 @@ COMMON_ARGS=(
   --power_interval_ms "$POWER_INTERVAL_MS"
   --freq_settle_s "$FREQ_SETTLE_S"
 )
+if [[ "$SHUFFLE_CONDITIONS" == "1" ]]; then
+  COMMON_ARGS+=(--shuffle_conditions)
+fi
 
 MODE_ARGS=()
 for mode in $INFERENCE_MODES; do
@@ -118,6 +129,24 @@ for steps in $DENOISING_STEPS; do
   DENOISE_ARGS+=("$steps")
 done
 
+TEXT_VIEW_ARGS=(--view_config)
+for view_config in $VIEW_CONFIGS_TEXT_ONLY; do
+  TEXT_VIEW_ARGS+=("$view_config")
+done
+
+VIEW_ONLY_VIEW_ARGS=()
+if [[ -n "$VIEW_CONFIG_PRESETS_VIEW_ONLY" ]]; then
+  for preset in $VIEW_CONFIG_PRESETS_VIEW_ONLY; do
+    VIEW_ONLY_VIEW_ARGS+=(--view_config_presets "$preset")
+  done
+fi
+if [[ -n "$VIEW_CONFIGS_VIEW_ONLY" ]]; then
+  VIEW_ONLY_VIEW_ARGS+=(--view_config)
+  for view_config in $VIEW_CONFIGS_VIEW_ONLY; do
+    VIEW_ONLY_VIEW_ARGS+=("$view_config")
+  done
+fi
+
 echo "[INFO] Running control sweep 1/2: text-only with both_views"
 TEXT_ARGS=(--text_lengths)
 for text_len in $TEXT_LENGTHS_TEXT_ONLY; do
@@ -129,7 +158,7 @@ PYTHONPATH=. "$BENCH_PYTHON" scripts/deployment/benchmark_input_sweep.py \
   "${MODE_ARGS[@]}" \
   "${CONFIG_ARGS[@]}" \
   "${DENOISE_ARGS[@]}" \
-  --view_config "both_views|image,wrist_image" \
+  "${TEXT_VIEW_ARGS[@]}" \
   "${TEXT_ARGS[@]}" \
   "${IMAGE_SIZE_ARGS[@]}" \
   --out_dir "$TEXT_OUT"
@@ -145,7 +174,7 @@ PYTHONPATH=. "$BENCH_PYTHON" scripts/deployment/benchmark_input_sweep.py \
   "${MODE_ARGS[@]}" \
   "${CONFIG_ARGS[@]}" \
   "${DENOISE_ARGS[@]}" \
-  --view_config "image_only|image" "both_views|image,wrist_image" \
+  "${VIEW_ONLY_VIEW_ARGS[@]}" \
   "${VIEW_TEXT_ARGS[@]}" \
   "${IMAGE_SIZE_ARGS[@]}" \
   --out_dir "$VIEW_OUT"

@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
+import csv
 from dataclasses import dataclass, field
 import logging
 import os
@@ -39,8 +40,132 @@ except ModuleNotFoundError:
             if pushed:
                 torch.cuda.nvtx.range_pop()
 
+try:
+    from gr00t.policy.gr00t_policy import _maybe_log_input_stats
+except (ImportError, ModuleNotFoundError):
+
+    def _maybe_log_input_stats(stage: str, payload: Any) -> None:
+        return
+
 
 warnings.simplefilter("ignore", category=FutureWarning)
+
+
+@contextmanager
+def cuda_profiler_range():
+    if os.environ.get("GR00T_CUDA_PROFILER_RANGE") != "1" or not torch.cuda.is_available():
+        yield
+        return
+
+    cuda_rt = torch.cuda.cudart()
+    cuda_rt.cudaProfilerStart()
+    try:
+        yield
+    finally:
+        cuda_rt.cudaProfilerStop()
+
+
+_STANDALONE_INPUT_STATS_COUNTER = 0
+
+
+def log_standalone_input_stats(stage: str, payload: Any) -> None:
+    path = os.environ.get("GR00T_STANDALONE_INPUT_STATS_CSV")
+    if not path:
+        return
+
+    global _STANDALONE_INPUT_STATS_COUNTER
+    limit = int(os.environ.get("GR00T_STANDALONE_INPUT_STATS_LIMIT", "3"))
+    if _STANDALONE_INPUT_STATS_COUNTER >= limit:
+        return
+
+    rows: list[dict[str, Any]] = []
+
+    def visit(name: str, value: Any) -> None:
+        if isinstance(value, np.ndarray):
+            row: dict[str, Any] = {
+                "sample": _STANDALONE_INPUT_STATS_COUNTER,
+                "stage": stage,
+                "name": name,
+                "type": "np.ndarray",
+                "shape": tuple(value.shape),
+                "dtype": str(value.dtype),
+                "device": "cpu",
+                "numel": value.size,
+            }
+            if value.size > 0 and np.issubdtype(value.dtype, np.number):
+                sample = value.astype(np.float32, copy=False)
+                row.update(
+                    {
+                        "finite_ratio": float(np.isfinite(sample).mean()),
+                        "nonzero_ratio": float((sample != 0).mean()),
+                        "mean": float(sample.mean()),
+                        "abs_mean": float(np.abs(sample).mean()),
+                        "min": float(sample.min()),
+                        "max": float(sample.max()),
+                    }
+                )
+            rows.append(row)
+        elif isinstance(value, torch.Tensor):
+            tensor = value.detach()
+            row = {
+                "sample": _STANDALONE_INPUT_STATS_COUNTER,
+                "stage": stage,
+                "name": name,
+                "type": "torch.Tensor",
+                "shape": tuple(tensor.shape),
+                "dtype": str(tensor.dtype),
+                "device": str(tensor.device),
+                "numel": tensor.numel(),
+            }
+            if tensor.numel() > 0 and (torch.is_floating_point(tensor) or tensor.dtype == torch.bool):
+                sample = tensor.float()
+                row.update(
+                    {
+                        "finite_ratio": float(torch.isfinite(sample).float().mean().item()),
+                        "nonzero_ratio": float((sample != 0).float().mean().item()),
+                        "mean": float(sample.mean().item()),
+                        "abs_mean": float(sample.abs().mean().item()),
+                        "min": float(sample.min().item()),
+                        "max": float(sample.max().item()),
+                    }
+                )
+            rows.append(row)
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                visit(f"{name}.{key}" if name else str(key), child)
+        elif isinstance(value, (list, tuple)):
+            for idx, child in enumerate(value):
+                visit(f"{name}[{idx}]", child)
+
+    visit("", payload)
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    exists = output_path.exists()
+    fieldnames = [
+        "sample",
+        "stage",
+        "name",
+        "type",
+        "shape",
+        "dtype",
+        "device",
+        "numel",
+        "finite_ratio",
+        "nonzero_ratio",
+        "mean",
+        "abs_mean",
+        "min",
+        "max",
+    ]
+    with output_path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not exists:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+    _STANDALONE_INPUT_STATS_COUNTER += 1
+
 
 """
 Combined inference script supporting both PyTorch and TensorRT modes.
@@ -123,7 +248,9 @@ class TensorRTDiTWrapper:
 
     def __call__(self, sa_embs, vl_embs, timestep, image_mask=None, backbone_attention_mask=None):
         """Forward pass through TensorRT DiT."""
-        with nvtx_range("VLA/action_head/TensorRT"):
+        with cuda_profiler_range(), nvtx_range("VLA_action_head_TensorRT"), nvtx_range(
+            "VLA/action_head/TensorRT"
+        ):
             # Setup context bindings
             sa_embs = sa_embs.to(f"cuda:{self.device}").contiguous()
             vl_embs = vl_embs.to(f"cuda:{self.device}").contiguous()
@@ -162,7 +289,9 @@ class TensorRTDiTWrapper:
 
             self.context.set_tensor_address("output", output.data_ptr())
 
-            with nvtx_range("VLA/action_head/TensorRT_enqueue"):
+            with nvtx_range("VLA_action_head_TensorRT_enqueue"), nvtx_range(
+                "VLA/action_head/TensorRT_enqueue"
+            ):
                 success = self.context.execute_async_v3(torch.cuda.current_stream().cuda_stream)
             if not success:
                 raise RuntimeError("TensorRT inference failed")
@@ -478,7 +607,10 @@ def run_single_trajectory(
 
         # Inference timing (GPU processing - CPU prepares next step in parallel)
         inference_start = time.time()
+        log_standalone_input_stats("parsed_observation", parsed_obs)
+        _maybe_log_input_stats("parsed_observation", parsed_obs)
         _action_chunk, _ = policy.get_action(parsed_obs)
+        log_standalone_input_stats("action_chunk", _action_chunk)
         inference_time = time.time() - inference_start
 
         # Only record timing after skipping the first N steps (warmup)

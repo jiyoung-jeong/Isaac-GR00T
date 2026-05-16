@@ -10,6 +10,14 @@ import torch
 _NVTX_RANGES_CSV = os.environ.get("NVTX_RANGES_CSV")
 
 
+def _should_control_cuda_profiler(name: str) -> bool:
+    requested = os.environ.get("GR00T_CUDA_PROFILER_RANGE", "")
+    if not requested or not torch.cuda.is_available():
+        return False
+    names = {item.strip() for item in requested.split(",") if item.strip()}
+    return name in names or name.replace("/", "_") in names
+
+
 def _log_nvtx_event(event: str) -> None:
     if not _NVTX_RANGES_CSV:
         return
@@ -26,14 +34,19 @@ def _log_nvtx_event(event: str) -> None:
 def nvtx_range(name: str):
     """Best-effort NVTX range that is a no-op when CUDA/NVTX is unavailable."""
     pushed = False
+    control_profiler = _should_control_cuda_profiler(name)
     try:
         if torch.cuda.is_available():
             torch.cuda.nvtx.range_push(name)
             pushed = True
+            if control_profiler:
+                torch.cuda.cudart().cudaProfilerStart()
         _log_nvtx_event(f"{name}_START")
         yield
     finally:
         _log_nvtx_event(f"{name}_END")
+        if control_profiler:
+            torch.cuda.cudart().cudaProfilerStop()
         if pushed:
             torch.cuda.nvtx.range_pop()
 

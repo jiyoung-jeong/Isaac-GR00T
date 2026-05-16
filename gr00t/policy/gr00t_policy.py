@@ -6,6 +6,8 @@ This module provides the core policy classes for running Gr00t models:
 """
 
 from pathlib import Path
+import csv
+import os
 from typing import Any
 
 import numpy as np
@@ -41,6 +43,108 @@ def _rec_to_dtype(x: Any, dtype: torch.dtype) -> Any:
         return [_rec_to_dtype(v, dtype) for v in x]
     else:
         return x
+
+
+_INPUT_STATS_COUNTER = 0
+
+
+def _tensor_stats_rows(name: str, value: Any) -> list[dict[str, Any]]:
+    rows = []
+    if isinstance(value, torch.Tensor):
+        row: dict[str, Any] = {
+            "name": name,
+            "type": "torch.Tensor",
+            "shape": tuple(value.shape),
+            "dtype": str(value.dtype),
+            "device": str(value.device),
+            "numel": value.numel(),
+        }
+        if value.numel() > 0 and (torch.is_floating_point(value) or value.dtype == torch.bool):
+            sample = value.detach()
+            if sample.dtype == torch.bool:
+                sample = sample.float()
+            sample = sample.float()
+            row.update(
+                {
+                    "finite_ratio": float(torch.isfinite(sample).float().mean().item()),
+                    "nonzero_ratio": float((sample != 0).float().mean().item()),
+                    "mean": float(sample.mean().item()),
+                    "abs_mean": float(sample.abs().mean().item()),
+                    "min": float(sample.min().item()),
+                    "max": float(sample.max().item()),
+                }
+            )
+        rows.append(row)
+    elif isinstance(value, np.ndarray):
+        row = {
+            "name": name,
+            "type": "np.ndarray",
+            "shape": value.shape,
+            "dtype": str(value.dtype),
+            "device": "cpu",
+            "numel": value.size,
+        }
+        if value.size > 0 and np.issubdtype(value.dtype, np.number):
+            sample = value.astype(np.float32, copy=False)
+            row.update(
+                {
+                    "finite_ratio": float(np.isfinite(sample).mean()),
+                    "nonzero_ratio": float((sample != 0).mean()),
+                    "mean": float(sample.mean()),
+                    "abs_mean": float(np.abs(sample).mean()),
+                    "min": float(sample.min()),
+                    "max": float(sample.max()),
+                }
+            )
+        rows.append(row)
+    elif isinstance(value, dict) or hasattr(value, "items"):
+        for key, child in value.items():
+            child_name = f"{name}.{key}" if name else str(key)
+            rows.extend(_tensor_stats_rows(child_name, child))
+    elif isinstance(value, (list, tuple)):
+        for idx, child in enumerate(value):
+            child_name = f"{name}[{idx}]"
+            rows.extend(_tensor_stats_rows(child_name, child))
+    return rows
+
+
+def _maybe_log_input_stats(stage: str, payload: Any) -> None:
+    path = os.environ.get("GR00T_INPUT_STATS_CSV")
+    if not path:
+        return
+
+    global _INPUT_STATS_COUNTER
+    limit = int(os.environ.get("GR00T_INPUT_STATS_LIMIT", "3"))
+    if _INPUT_STATS_COUNTER >= limit:
+        return
+
+    rows = _tensor_stats_rows("", payload)
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    exists = output_path.exists()
+    fieldnames = [
+        "sample",
+        "stage",
+        "name",
+        "type",
+        "shape",
+        "dtype",
+        "device",
+        "numel",
+        "finite_ratio",
+        "nonzero_ratio",
+        "mean",
+        "abs_mean",
+        "min",
+        "max",
+    ]
+    with output_path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not exists:
+            writer.writeheader()
+        for row in rows:
+            row = {"sample": _INPUT_STATS_COUNTER, "stage": stage, **row}
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
 
 
 class Gr00tPolicy(BasePolicy):
@@ -337,10 +441,15 @@ class Gr00tPolicy(BasePolicy):
         # Step 3: Collate processed inputs into a single batch for model
         collated_inputs = self.collate_fn(processed_inputs)
         collated_inputs = _rec_to_dtype(collated_inputs, dtype=torch.bfloat16)
+        _maybe_log_input_stats("collated_model_inputs", collated_inputs)
 
         # Step 4: Run model inference to predict actions
         with torch.inference_mode():
             model_pred = self.model.get_action(**collated_inputs)
+        _maybe_log_input_stats("model_prediction", model_pred)
+        global _INPUT_STATS_COUNTER
+        if os.environ.get("GR00T_INPUT_STATS_CSV"):
+            _INPUT_STATS_COUNTER += 1
         normalized_action = model_pred["action_pred"].float()
 
         # Step 5: Decode actions from normalized space back to physical units

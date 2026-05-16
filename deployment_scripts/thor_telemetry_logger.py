@@ -16,8 +16,14 @@ CPU_V = os.environ.get("THOR_CPU_V", "/sys/bus/i2c/devices/2-0040/hwmon/hwmon6/i
 CPU_I = os.environ.get("THOR_CPU_I", "/sys/bus/i2c/devices/2-0040/hwmon/hwmon6/curr2_input")
 VIN_PWR_UW = os.environ.get("THOR_VIN_PWR_UW", "/sys/bus/i2c/devices/2-0044/hwmon/hwmon5/power1_input")
 GPUF = os.environ.get("THOR_GPUF", "/sys/class/devfreq/gpu-gpc-0/cur_freq")
-CPU0 = os.environ.get("THOR_CPU0", "/sys/devices/system/cpu/cpufreq/policy0/cpuinfo_cur_freq")
-CPU4 = os.environ.get("THOR_CPU4", "/sys/devices/system/cpu/cpufreq/policy4/cpuinfo_cur_freq")
+CPU_POLICY_IDS = [0, 2, 4, 6, 8, 10, 12]
+CPU_POLICY_PATHS = {
+    policy_id: os.environ.get(
+        f"THOR_CPU_POLICY{policy_id}",
+        f"/sys/devices/system/cpu/cpufreq/policy{policy_id}/cpuinfo_cur_freq",
+    )
+    for policy_id in CPU_POLICY_IDS
+}
 GPU_GPC0_RATE = os.environ.get("THOR_GPU_GPC0_RATE", "/sys/kernel/debug/bpmp/debug/clk/gpu_gpc0/rate")
 GPU_GPC1_RATE = os.environ.get("THOR_GPU_GPC1_RATE", "/sys/kernel/debug/bpmp/debug/clk/gpu_gpc1/rate")
 GPU_GPC2_RATE = os.environ.get("THOR_GPU_GPC2_RATE", "/sys/kernel/debug/bpmp/debug/clk/gpu_gpc2/rate")
@@ -52,15 +58,14 @@ def _sample():
         except (ValueError, TypeError):
             return default
     gf = _int(_read(GPUF, "-1"))
-    c0 = _int(_read(CPU0, "-1"))
-    c4 = _int(_read(CPU4, "-1"))
+    cpu_policy_freqs = [_int(_read(CPU_POLICY_PATHS[policy_id], "-1")) for policy_id in CPU_POLICY_IDS]
     gpc0 = _int(_read(GPU_GPC0_RATE, "-1"))
     gpc1 = _int(_read(GPU_GPC1_RATE, "-1"))
     gpc2 = _int(_read(GPU_GPC2_RATE, "-1"))
     gsys = _int(_read(GPU_SYS_RATE, "-1"))
     gnvd = _int(_read(GPU_NVD_RATE, "-1"))
     emc = _int(_read(EMC_RATE, "-1"))
-    return ts_ns, pg, pc, vin_w, gf, c0, c4, gpc0, gpc1, gpc2, gsys, gnvd, emc
+    return (ts_ns, pg, pc, vin_w, gf, *cpu_policy_freqs, gpc0, gpc1, gpc2, gsys, gnvd, emc)
 
 
 def _stop(*_):
@@ -78,7 +83,9 @@ def main():
     with open(RAW_CSV, "a") as f:
         while RUN:
             row = _sample()
-            f.write(f"{row[0]},{row[1]:.6f},{row[2]:.6f},{row[3]:.6f},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]}\n")
+            head = [str(row[0]), f"{row[1]:.6f}", f"{row[2]:.6f}", f"{row[3]:.6f}"]
+            tail = [str(v) for v in row[4:]]
+            f.write(",".join(head + tail) + "\n")
             f.flush()
             time.sleep(interval_sec)
 

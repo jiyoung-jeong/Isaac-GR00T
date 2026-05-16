@@ -36,6 +36,8 @@ dependencies = [
     "matplotlib==3.10.1",
     "numpy==1.26.4",
     "omegaconf==2.3.0",
+    "joblib>=1.4.0",
+    "scikit-learn>=1.4.0",
     "scipy==1.15.3",
     # torchcodec has no aarch64 Linux wheel — built from source on aarch64 by install_deps.sh
     "torchcodec==0.4.0; platform_machine != 'aarch64' or sys_platform != 'linux'",
@@ -63,7 +65,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["gr00t*"]
+include = ["gr00t*", "mars*"]
 
 [tool.uv]
 
@@ -90,7 +92,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-src = ["gr00t"]
+src = ["gr00t", "mars"]
 exclude = [
     "__pycache__",
     ".git",

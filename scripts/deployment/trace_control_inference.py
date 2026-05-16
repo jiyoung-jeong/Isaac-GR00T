@@ -79,21 +79,28 @@ PHASE_LABELS = {
 def _telemetry_sample_dict(ina3221, gpu_ch, cpu_ch, vin_ch) -> dict[str, float]:
     row = telem._sample()
     power_row = sample_power_row(ina3221, gpu_ch, cpu_ch, vin_ch)
-    return {
+    cpu_offset = 5
+    gpu_offset = cpu_offset + len(telem.CPU_POLICY_IDS)
+    sample = {
         "ts_ns": int(row[0]),
         "gpu_power_w": float(power_row["gpu_power_w"]),
         "cpu_power_w": float(power_row["cpu_soc_mss_power_w"]),
         "vin_power_w": float(power_row["vin_power_w"]),
         "gpu_cur_freq_hz": int(row[4]),
-        "cpu0_khz": int(row[5]),
-        "cpu4_khz": int(row[6]),
-        "gpu_gpc0_hz": int(row[7]),
-        "gpu_gpc1_hz": int(row[8]),
-        "gpu_gpc2_hz": int(row[9]),
-        "gpu_sys_hz": int(row[10]),
-        "gpu_nvd_hz": int(row[11]),
-        "emc_rate_hz": int(row[12]),
     }
+    for idx, policy_id in enumerate(telem.CPU_POLICY_IDS):
+        sample[f"cpu{policy_id}_khz"] = int(row[cpu_offset + idx])
+    sample.update(
+        {
+            "gpu_gpc0_hz": int(row[gpu_offset + 0]),
+            "gpu_gpc1_hz": int(row[gpu_offset + 1]),
+            "gpu_gpc2_hz": int(row[gpu_offset + 2]),
+            "gpu_sys_hz": int(row[gpu_offset + 3]),
+            "gpu_nvd_hz": int(row[gpu_offset + 4]),
+            "emc_rate_hz": int(row[gpu_offset + 5]),
+        }
+    )
+    return sample
 
 
 def telemetry_loop(stop_flag: list[bool], samples: list[dict[str, float]], interval_s: float, ina3221, gpu_ch, cpu_ch, vin_ch) -> None:
@@ -336,9 +343,14 @@ def make_trace_plots(
     telem_df = add_relative_time(samples_df, origin_ns)
     phase_local = phase_df.copy()
 
-    cpu_ghz = valid_or_nan(telem_df["cpu4_khz"], scale=1e6)
+    cpu_policy_cols = [f"cpu{policy_id}_khz" for policy_id in telem.CPU_POLICY_IDS if f"cpu{policy_id}_khz" in telem_df.columns]
+    cpu_policy_arrays = {
+        col: valid_or_nan(telem_df[col], scale=1e6)
+        for col in cpu_policy_cols
+    }
     gpu_ghz = valid_or_nan(telem_df["gpu_gpc0_hz"], scale=1e9)
     emc_ghz = valid_or_nan(telem_df["emc_rate_hz"], scale=1e9)
+    cpu_policy_colors = plt.cm.viridis(np.linspace(0.12, 0.9, max(len(cpu_policy_cols), 1)))
 
     phase_handles = [
         Patch(facecolor=PHASE_COLORS[p], alpha=0.28, label=PHASE_LABELS[p])
@@ -357,7 +369,17 @@ def make_trace_plots(
     # Frequency plot
     fig, ax = plt.subplots(figsize=(13, 5), dpi=160)
     shade_phases(ax, phase_local, origin_ns)
-    _plot_valid_series(ax, telem_df["t_ms"], cpu_ghz, label="CPU policy4 (GHz)", color="C2", linewidth=1.5, step=True)
+    for color, col in zip(cpu_policy_colors, cpu_policy_cols):
+        policy_id = col.replace("cpu", "").replace("_khz", "")
+        _plot_valid_series(
+            ax,
+            telem_df["t_ms"],
+            cpu_policy_arrays[col],
+            label=f"CPU policy{policy_id} (GHz)",
+            color=color,
+            linewidth=1.2,
+            step=True,
+        )
     _plot_valid_series(ax, telem_df["t_ms"], gpu_ghz, label="GPU GPC0 (GHz)", color="C1", linewidth=1.5, step=True)
     _plot_valid_series(ax, telem_df["t_ms"], emc_ghz, label="EMC (GHz)", color="C3", linewidth=1.5, step=True)
     ax.set_xlabel("Time (ms relative to inference 1 start)")
@@ -413,7 +435,17 @@ def make_trace_plots(
     # Freq
     ax = axes[0]
     shade_phases(ax, phase_local, origin_ns)
-    _plot_valid_series(ax, telem_df["t_ms"], cpu_ghz, label="CPU policy4 (GHz)", color="C2", linewidth=1.4, step=True)
+    for color, col in zip(cpu_policy_colors, cpu_policy_cols):
+        policy_id = col.replace("cpu", "").replace("_khz", "")
+        _plot_valid_series(
+            ax,
+            telem_df["t_ms"],
+            cpu_policy_arrays[col],
+            label=f"CPU policy{policy_id} (GHz)",
+            color=color,
+            linewidth=1.2,
+            step=True,
+        )
     _plot_valid_series(ax, telem_df["t_ms"], gpu_ghz, label="GPU GPC0 (GHz)", color="C1", linewidth=1.4, step=True)
     _plot_valid_series(ax, telem_df["t_ms"], emc_ghz, label="EMC (GHz)", color="C3", linewidth=1.4, step=True)
     ax.set_ylabel("Freq (GHz)")
